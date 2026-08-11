@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     initial_admin_email: str = "admin@obd2solucionesdiesel.com"
     initial_admin_password: str = "CambiarEstaClave123!"
     access_token_minutes: int = 480
+    upload_dir: str = "uploads"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property

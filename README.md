@@ -6,10 +6,14 @@ Portal web responsive para el control comercial, servicios, pagos, fechas promes
 
 - Panel ejecutivo de ventas, cobros, saldos y cartera vencida.
 - Clientes y prospectos identificados por su número de WhatsApp.
+- Ficha integral editable con estado de cuenta e historial cronológico.
 - Catálogo básico de productos y servicios.
 - Registro de ventas, trabajos y unidades.
 - Abonos con validación contra el saldo pendiente.
 - Fechas promesa, cumplimiento y días de mora.
+- Notas, llamadas y próximos seguimientos por cliente.
+- Documentos privados con descarga autenticada (PDF e imágenes).
+- Acceso directo a WhatsApp y cancelación controlada de ventas sin pagos.
 - Diseño adaptable a computadora, tablet y celular.
 - API protegida con autenticación y perfiles preparados para ampliación.
 
@@ -49,6 +53,18 @@ PYTHONPATH=. ../.venv/bin/python -m scripts.seed_demo
 ```
 
 El comando agrega clientes, prospectos, catálogo, ventas, pagos y promesas con fechas relativas al día de ejecución. Puede repetirse sin duplicar el escenario demo.
+
+## Ficha integral del cliente
+
+Desde **Clientes**, seleccionar cualquier fila para abrir su ficha. La vista reúne:
+
+- Estado de cuenta y operaciones.
+- Edición de datos generales y próxima fecha de seguimiento.
+- Historial de notas, llamadas, WhatsApp, visitas y cambios automáticos.
+- Documentos PDF, JPG, PNG o WEBP de hasta 10 MB.
+- Botón para iniciar conversación en WhatsApp.
+
+Los documentos se guardan fuera del frontend y solo pueden descargarse mediante una sesión autenticada. En Docker se conservan en el volumen `uploads_data`.
 
 ## Producción con Docker
 

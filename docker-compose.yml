@@ -24,6 +24,9 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-https://portal.obd2solucionesdiesel.com}
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@obd2solucionesdiesel.com}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Configure INITIAL_ADMIN_PASSWORD en .env}
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads_data:/data/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -36,3 +39,4 @@ services:
       - backend
 volumes:
   postgres_data:
+  uploads_data:

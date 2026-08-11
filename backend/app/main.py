@@ -1,15 +1,19 @@
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from decimal import Decimal
-from fastapi import Depends, FastAPI, HTTPException, Query
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 from .auth import create_token, current_user, hash_password, verify_password
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
-from .models import Customer, CustomerStatus, Payment, PaymentPromise, Product, PromiseStatus, Sale, SaleStatus, User
-from .schemas import CustomerIn, CustomerOut, DashboardOut, LoginIn, LoginOut, PaymentIn, PaymentOut, ProductIn, ProductOut, PromiseIn, PromiseOut, SaleIn, SaleOut, UserOut
+from .models import Customer, CustomerActivity, CustomerFile, CustomerStatus, Payment, PaymentPromise, Product, PromiseStatus, Sale, SaleStatus, User
+from .schemas import ActivityIn, ActivityOut, CustomerDetail, CustomerFileOut, CustomerIn, CustomerOut, DashboardOut, LoginIn, LoginOut, PaymentIn, PaymentOut, ProductIn, ProductOut, PromiseIn, PromiseOut, SaleIn, SaleOut, UserOut
 
 
 settings = get_settings()
@@ -17,6 +21,30 @@ settings = get_settings()
 
 def money(value) -> Decimal:
     return Decimal(value or 0).quantize(Decimal("0.01"))
+
+
+def log_activity(db: Session, customer_id: int, user_id: int, activity_type: str, description: str, follow_up_date=None):
+    db.add(CustomerActivity(customer_id=customer_id, user_id=user_id, activity_type=activity_type, description=description, follow_up_date=follow_up_date))
+
+
+def activity_out(item: CustomerActivity) -> ActivityOut:
+    return ActivityOut.model_validate({**item.__dict__, "user_name": item.user.name})
+
+
+def file_out(item: CustomerFile) -> CustomerFileOut:
+    return CustomerFileOut.model_validate({**item.__dict__, "user_name": item.user.name})
+
+
+def customer_balance(customer: Customer) -> Decimal:
+    balance = sum(
+        (
+            money(sale.amount) - sum((money(payment.amount) for payment in sale.payments), Decimal("0"))
+            for sale in customer.sales
+            if sale.status == SaleStatus.won
+        ),
+        Decimal("0"),
+    )
+    return max(balance, Decimal("0"))
 
 
 def sale_out(sale: Sale) -> SaleOut:
@@ -81,29 +109,120 @@ def customers(search: str = Query("", max_length=100), db: Session = Depends(get
         query = query.where(or_(Customer.name.ilike(term), Customer.company.ilike(term), Customer.phone.ilike(term)))
     result = []
     for customer in db.scalars(query).unique():
-        balance = sum((money(s.amount) - sum((money(p.amount) for p in s.payments), Decimal("0")) for s in customer.sales if s.status == SaleStatus.won), Decimal("0"))
-        result.append(CustomerOut.model_validate({**customer.__dict__, "balance": max(balance, Decimal("0"))}))
+        result.append(CustomerOut.model_validate({**customer.__dict__, "balance": customer_balance(customer)}))
     return result
 
 
+@app.get("/api/customers/{customer_id}", response_model=CustomerDetail)
+def customer_detail(customer_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    query = (
+        select(Customer)
+        .where(Customer.id == customer_id)
+        .options(
+            selectinload(Customer.sales).selectinload(Sale.payments),
+            selectinload(Customer.activities).selectinload(CustomerActivity.user),
+            selectinload(Customer.files).selectinload(CustomerFile.user),
+        )
+    )
+    customer = db.scalar(query)
+    if not customer:
+        raise HTTPException(404, "Cliente no encontrado")
+    ordered_sales = sorted(customer.sales, key=lambda sale: (sale.sale_date, sale.id), reverse=True)
+    ordered_activities = sorted(customer.activities, key=lambda item: item.created_at, reverse=True)
+    ordered_files = sorted(customer.files, key=lambda item: item.created_at, reverse=True)
+    return CustomerDetail.model_validate({
+        **customer.__dict__,
+        "balance": customer_balance(customer),
+        "sales": [sale_out(sale) for sale in ordered_sales],
+        "activities": [activity_out(item) for item in ordered_activities],
+        "files": [file_out(item) for item in ordered_files],
+    })
+
+
 @app.post("/api/customers", response_model=CustomerOut, status_code=201)
-def create_customer(data: CustomerIn, db: Session = Depends(get_db), _: User = Depends(current_user)):
+def create_customer(data: CustomerIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     phone = "".join(char for char in data.phone if char.isdigit())
     if db.scalar(select(Customer).where(Customer.phone == phone)):
         raise HTTPException(status_code=409, detail="Ya existe un cliente con ese teléfono")
     item = Customer(**data.model_dump(exclude={"phone"}), phone=phone)
-    db.add(item); db.commit(); db.refresh(item)
+    db.add(item); db.flush()
+    log_activity(db, item.id, user.id, "created", "Ficha del cliente creada.")
+    db.commit(); db.refresh(item)
     return CustomerOut.model_validate({**item.__dict__, "balance": 0})
 
 
 @app.patch("/api/customers/{customer_id}", response_model=CustomerOut)
-def update_customer(customer_id: int, data: CustomerIn, db: Session = Depends(get_db), _: User = Depends(current_user)):
-    item = db.get(Customer, customer_id)
+def update_customer(customer_id: int, data: CustomerIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    item = db.scalar(select(Customer).where(Customer.id == customer_id).options(selectinload(Customer.sales).selectinload(Sale.payments)))
     if not item: raise HTTPException(404, "Cliente no encontrado")
     values = data.model_dump(); values["phone"] = "".join(c for c in data.phone if c.isdigit())
     for key, value in values.items(): setattr(item, key, value)
+    log_activity(db, item.id, user.id, "updated", "Información general del cliente actualizada.", data.next_follow_up)
     db.commit(); db.refresh(item)
-    return CustomerOut.model_validate({**item.__dict__, "balance": 0})
+    return CustomerOut.model_validate({**item.__dict__, "balance": customer_balance(item)})
+
+
+@app.post("/api/customers/{customer_id}/activities", response_model=ActivityOut, status_code=201)
+def create_activity(customer_id: int, data: ActivityIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    customer = db.get(Customer, customer_id)
+    if not customer:
+        raise HTTPException(404, "Cliente no encontrado")
+    item = CustomerActivity(customer_id=customer_id, user_id=user.id, **data.model_dump())
+    if data.follow_up_date:
+        customer.next_follow_up = data.follow_up_date
+    db.add(item); db.commit()
+    item = db.scalar(select(CustomerActivity).where(CustomerActivity.id == item.id).options(selectinload(CustomerActivity.user)))
+    return activity_out(item)
+
+
+@app.post("/api/customers/{customer_id}/files", response_model=CustomerFileOut, status_code=201)
+async def upload_customer_file(
+    customer_id: int,
+    file: UploadFile = File(...),
+    description: str | None = Form(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    if not db.get(Customer, customer_id):
+        raise HTTPException(404, "Cliente no encontrado")
+    allowed_types = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+    content_type = file.content_type or "application/octet-stream"
+    if content_type not in allowed_types:
+        raise HTTPException(400, "Solo se permiten archivos PDF, JPG, PNG o WEBP")
+    content = await file.read(10 * 1024 * 1024 + 1)
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(400, "El archivo supera el límite de 10 MB")
+    original_name = Path(file.filename or "documento").name[:255]
+    suffix = Path(original_name).suffix.lower()
+    stored_name = f"{uuid4().hex}{suffix}"
+    upload_dir = Path(settings.upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    (upload_dir / stored_name).write_bytes(content)
+    item = CustomerFile(
+        customer_id=customer_id,
+        user_id=user.id,
+        original_name=original_name,
+        stored_name=stored_name,
+        content_type=content_type,
+        size=len(content),
+        description=(description or "").strip()[:255] or None,
+    )
+    db.add(item)
+    log_activity(db, customer_id, user.id, "file", f"Documento adjuntado: {original_name}")
+    db.commit()
+    item = db.scalar(select(CustomerFile).where(CustomerFile.id == item.id).options(selectinload(CustomerFile.user)))
+    return file_out(item)
+
+
+@app.get("/api/customer-files/{file_id}/download")
+def download_customer_file(file_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    item = db.get(CustomerFile, file_id)
+    if not item:
+        raise HTTPException(404, "Documento no encontrado")
+    path = Path(settings.upload_dir) / item.stored_name
+    if not path.is_file():
+        raise HTTPException(404, "El archivo físico no está disponible")
+    return FileResponse(path, media_type=item.content_type, filename=item.original_name)
 
 
 @app.get("/api/products", response_model=list[ProductOut])
@@ -123,21 +242,38 @@ def sales(db: Session = Depends(get_db), _: User = Depends(current_user)):
 
 
 @app.post("/api/sales", response_model=SaleOut, status_code=201)
-def create_sale(data: SaleIn, db: Session = Depends(get_db), _: User = Depends(current_user)):
+def create_sale(data: SaleIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     if not db.get(Customer, data.customer_id): raise HTTPException(404, "Cliente no encontrado")
-    item = Sale(**data.model_dump()); db.add(item); db.commit()
+    item = Sale(**data.model_dump()); db.add(item); db.flush()
+    log_activity(db, item.customer_id, user.id, "sale", f"Venta registrada: {item.concept} por {money(item.amount)} MXN.")
+    db.commit()
     item = db.scalar(select(Sale).where(Sale.id == item.id).options(selectinload(Sale.customer), selectinload(Sale.payments)))
     return sale_out(item)
 
 
 @app.post("/api/payments", response_model=PaymentOut, status_code=201)
-def create_payment(data: PaymentIn, db: Session = Depends(get_db), _: User = Depends(current_user)):
+def create_payment(data: PaymentIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     sale = db.scalar(select(Sale).where(Sale.id == data.sale_id).options(selectinload(Sale.payments)))
     if not sale: raise HTTPException(404, "Venta no encontrada")
     balance = money(sale.amount) - sum((money(p.amount) for p in sale.payments), Decimal("0"))
     if money(data.amount) > balance: raise HTTPException(400, f"El abono supera el saldo de {balance}")
-    item = Payment(**data.model_dump()); db.add(item); db.commit(); db.refresh(item)
+    item = Payment(**data.model_dump()); db.add(item)
+    log_activity(db, sale.customer_id, user.id, "payment", f"Pago registrado por {money(item.amount)} MXN para {sale.concept}.")
+    db.commit(); db.refresh(item)
     return item
+
+
+@app.patch("/api/sales/{sale_id}/cancel", response_model=SaleOut)
+def cancel_sale(sale_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    sale = db.scalar(select(Sale).where(Sale.id == sale_id).options(selectinload(Sale.customer), selectinload(Sale.payments)))
+    if not sale:
+        raise HTTPException(404, "Venta no encontrada")
+    if sale.payments:
+        raise HTTPException(400, "No se puede cancelar una venta que ya tiene pagos registrados")
+    sale.status = SaleStatus.cancelled
+    log_activity(db, sale.customer_id, user.id, "cancelled", f"Venta cancelada: {sale.concept}.")
+    db.commit()
+    return sale_out(sale)
 
 
 @app.get("/api/promises", response_model=list[PromiseOut])

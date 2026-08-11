@@ -6,17 +6,23 @@ import {
   CalendarClock,
   ChevronRight,
   ClipboardList,
+  Clock,
+  Download,
+  FileText,
   LogOut,
   Menu,
+  MessageCircle,
   Package,
+  PenLine,
+  Phone,
   Plus,
   Search,
   Users,
   WalletCards,
   X,
 } from "lucide-react";
-import { api } from "./api";
-import type { Customer, Dashboard, Product, PromiseItem, Sale } from "./types";
+import { api, apiForm, downloadFile } from "./api";
+import type { Customer, CustomerDetail, Dashboard, Product, PromiseItem, Sale } from "./types";
 import "./styles.css";
 
 const money = (n: number) =>
@@ -321,7 +327,8 @@ function DashboardPage() {
 function Customers() {
   const [items, setItems] = useState<Customer[]>([]),
     [search, setSearch] = useState(""),
-    [open, setOpen] = useState(false);
+    [open, setOpen] = useState(false),
+    [selected, setSelected] = useState<Customer | null>(null);
   const load = () =>
     api<Customer[]>(`/api/customers?search=${encodeURIComponent(search)}`).then(
       setItems,
@@ -374,7 +381,7 @@ function Customers() {
           </thead>
           <tbody>
             {items.map((c) => (
-              <tr key={c.id}>
+              <tr className="clickable-row" key={c.id} onClick={() => setSelected(c)}>
                 <td>
                   <b>{c.name}</b>
                   <small>{c.company || "Cliente particular"}</small>
@@ -428,7 +435,92 @@ function Customers() {
           </form>
         </Modal>
       )}
+      {selected && (
+        <CustomerProfile
+          customerId={selected.id}
+          close={() => setSelected(null)}
+          changed={load}
+        />
+      )}
     </>
+  );
+}
+
+function CustomerProfile({
+  customerId,
+  close,
+  changed,
+}: {
+  customerId: number;
+  close: () => void;
+  changed: () => void;
+}) {
+  const [data, setData] = useState<CustomerDetail | null>(null),
+    [tab, setTab] = useState<"account" | "history" | "files">("account"),
+    [editing, setEditing] = useState(false),
+    [addingActivity, setAddingActivity] = useState(false),
+    [addingFile, setAddingFile] = useState(false);
+  const load = () => api<CustomerDetail>(`/api/customers/${customerId}`).then(setData);
+  useEffect(() => {
+    void load();
+  }, [customerId]);
+  if (!data) return <div className="overlay"><div className="profile-loading">Cargando ficha…</div></div>;
+
+  async function saveCustomer(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    await api(`/api/customers/${customerId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name: form.get("name"), company: form.get("company") || null,
+        phone: form.get("phone"), email: form.get("email") || null,
+        status: form.get("status"), notes: form.get("notes") || null,
+        next_follow_up: form.get("next_follow_up") || null,
+      }),
+    });
+    setEditing(false); await load(); changed();
+  }
+  async function saveActivity(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault(); const form = new FormData(e.currentTarget);
+    await api(`/api/customers/${customerId}/activities`, {method:"POST", body:JSON.stringify({activity_type:form.get("activity_type"),description:form.get("description"),follow_up_date:form.get("follow_up_date")||null})});
+    setAddingActivity(false); await load(); changed();
+  }
+  async function saveFile(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault(); const form = new FormData(e.currentTarget);
+    await apiForm(`/api/customers/${customerId}/files`, form);
+    setAddingFile(false); await load();
+  }
+  async function cancelSale(sale: Sale) {
+    if (!window.confirm(`¿Cancelar la venta "${sale.concept}"? El registro permanecerá en el historial.`)) return;
+    try { await api(`/api/sales/${sale.id}/cancel`, {method:"PATCH"}); await load(); changed(); }
+    catch (error) { window.alert((error as Error).message); }
+  }
+  const whatsappPhone = data.phone.startsWith("52") ? data.phone : `52${data.phone}`;
+  return (
+    <div className="overlay profile-overlay" onMouseDown={close}>
+      <section className="customer-profile" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="profile-head">
+          <div className="profile-avatar">{data.name.split(" ").map((part) => part[0]).slice(0,2).join("")}</div>
+          <div className="profile-title"><span className={`pill ${data.status}`}>{data.status === "active" ? "Cliente activo" : data.status === "prospect" ? "Prospecto" : "Inactivo"}</span><h2>{data.name}</h2><p>{data.company || "Cliente particular"}</p></div>
+          <div className="profile-actions">
+            <a className="whatsapp-btn" href={`https://wa.me/${whatsappPhone}`} target="_blank" rel="noreferrer"><MessageCircle size={17}/>WhatsApp</a>
+            <button className="secondary-btn" onClick={() => setEditing(true)}><PenLine size={17}/>Editar</button>
+            <button className="icon" onClick={close}><X/></button>
+          </div>
+        </header>
+        <div className="profile-contact"><span><Phone size={15}/>{data.phone}</span><span>{data.email || "Sin correo registrado"}</span>{data.next_follow_up && <span><Clock size={15}/>Seguimiento: {data.next_follow_up}</span>}</div>
+        <section className="profile-metrics"><div><span>Ventas</span><strong>{money(data.sales.filter((sale) => sale.status === "won").reduce((sum, sale) => sum + Number(sale.amount), 0))}</strong></div><div><span>Pagado</span><strong>{money(data.sales.reduce((sum, sale) => sum + Number(sale.paid), 0))}</strong></div><div className="metric-owed"><span>Saldo pendiente</span><strong>{money(data.balance)}</strong></div><div><span>Operaciones</span><strong>{data.sales.length}</strong></div></section>
+        <nav className="profile-tabs"><button className={tab === "account" ? "active" : ""} onClick={() => setTab("account")}>Estado de cuenta</button><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Historial <span>{data.activities.length}</span></button><button className={tab === "files" ? "active" : ""} onClick={() => setTab("files")}>Documentos <span>{data.files.length}</span></button></nav>
+        <div className="profile-body">
+          {tab === "account" && <><div className="section-heading"><div><h3>Ventas y servicios</h3><p>Movimientos y saldos del cliente.</p></div></div><div className="account-list">{data.sales.map((sale) => <article className={sale.status === "cancelled" ? "cancelled" : ""} key={sale.id}><div><b>{sale.concept}</b><small>{sale.sale_date}{sale.vehicle ? ` · ${sale.vehicle}` : ""}</small></div><div><span>Total</span><b>{money(sale.amount)}</b></div><div><span>Pagado</span><b>{money(sale.paid)}</b></div><div><span>Saldo</span><b className={sale.balance ? "owed" : ""}>{money(sale.balance)}</b></div>{sale.status === "cancelled" ? <span className="pill inactive">Cancelada</span> : sale.paid === 0 && <button className="link danger-link" onClick={() => cancelSale(sale)}>Cancelar</button>}</article>)}{!data.sales.length && <Empty text="Este cliente todavía no tiene operaciones."/>}</div></>}
+          {tab === "history" && <><div className="section-heading"><div><h3>Historial de seguimiento</h3><p>Notas, contactos y cambios de la cuenta.</p></div><button onClick={() => setAddingActivity(true)}><Plus size={16}/>Agregar actividad</button></div><div className="timeline">{data.activities.map((item) => <article key={item.id}><div className={`timeline-icon ${item.activity_type}`}><Clock size={15}/></div><div><b>{item.description}</b><p>{item.user_name} · {new Date(item.created_at).toLocaleString("es-MX")}</p>{item.follow_up_date && <span>Próximo seguimiento: {item.follow_up_date}</span>}</div></article>)}{!data.activities.length && <Empty text="Agrega la primera nota de seguimiento."/>}</div></>}
+          {tab === "files" && <><div className="section-heading"><div><h3>Documentos privados</h3><p>Comprobantes, cotizaciones y evidencias.</p></div><button onClick={() => setAddingFile(true)}><Plus size={16}/>Adjuntar documento</button></div><div className="file-list">{data.files.map((file) => <article key={file.id}><div className="file-icon"><FileText/></div><div><b>{file.original_name}</b><small>{file.description || "Sin descripción"} · {(file.size / 1024).toFixed(1)} KB</small></div><button className="icon" title="Descargar" onClick={() => downloadFile(`/api/customer-files/${file.id}/download`, file.original_name)}><Download/></button></article>)}{!data.files.length && <Empty text="No hay documentos adjuntos."/>}</div></>}
+        </div>
+      </section>
+      {editing && <Modal title="Editar cliente" close={() => setEditing(false)}><form className="form" onSubmit={saveCustomer}><Field label="Nombre o contacto" name="name" defaultValue={data.name} required/><Field label="Empresa" name="company" defaultValue={data.company}/><div className="row"><Field label="WhatsApp" name="phone" defaultValue={data.phone} required/><Field label="Correo" name="email" type="email" defaultValue={data.email}/></div><label>Estado<select name="status" defaultValue={data.status}><option value="prospect">Prospecto</option><option value="active">Cliente activo</option><option value="inactive">Inactivo</option></select></label><Field label="Próximo seguimiento" name="next_follow_up" type="date" defaultValue={data.next_follow_up}/><label>Notas<textarea name="notes" rows={3} defaultValue={data.notes}/></label><Submit/></form></Modal>}
+      {addingActivity && <Modal title="Agregar actividad" close={() => setAddingActivity(false)}><form className="form" onSubmit={saveActivity}><label>Tipo<select name="activity_type"><option value="note">Nota</option><option value="call">Llamada</option><option value="whatsapp">WhatsApp</option><option value="visit">Visita</option><option value="promise">Compromiso</option></select></label><label>Descripción<textarea name="description" rows={4} required placeholder="Resultado del contacto o información relevante…"/></label><Field label="Próximo seguimiento" name="follow_up_date" type="date"/><Submit/></form></Modal>}
+      {addingFile && <Modal title="Adjuntar documento" close={() => setAddingFile(false)}><form className="form" onSubmit={saveFile}><label>Archivo<input name="file" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" required/></label><Field label="Descripción" name="description" placeholder="Ej. Comprobante de transferencia"/><small className="form-help">PDF o imagen, máximo 10 MB.</small><Submit/></form></Modal>}
+    </div>
   );
 }
 

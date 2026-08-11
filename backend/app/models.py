@@ -51,6 +51,12 @@ class Customer(Base):
     next_follow_up: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     sales: Mapped[list["Sale"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
+    activities: Mapped[list["CustomerActivity"]] = relationship(
+        back_populates="customer", cascade="all, delete-orphan"
+    )
+    files: Mapped[list["CustomerFile"]] = relationship(
+        back_populates="customer", cascade="all, delete-orphan"
+    )
 
 
 class Product(Base):
@@ -101,3 +107,31 @@ class PaymentPromise(Base):
     status: Mapped[PromiseStatus] = mapped_column(Enum(PromiseStatus), default=PromiseStatus.pending)
     notes: Mapped[str | None] = mapped_column(Text)
     sale: Mapped[Sale] = relationship(back_populates="promises")
+
+
+class CustomerActivity(Base):
+    __tablename__ = "customer_activities"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    activity_type: Mapped[str] = mapped_column(String(40), default="note")
+    description: Mapped[str] = mapped_column(Text)
+    follow_up_date: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    customer: Mapped[Customer] = relationship(back_populates="activities")
+    user: Mapped[User] = relationship()
+
+
+class CustomerFile(Base):
+    __tablename__ = "customer_files"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    original_name: Mapped[str] = mapped_column(String(255))
+    stored_name: Mapped[str] = mapped_column(String(255), unique=True)
+    content_type: Mapped[str] = mapped_column(String(120))
+    size: Mapped[int] = mapped_column()
+    description: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    customer: Mapped[Customer] = relationship(back_populates="files")
+    user: Mapped[User] = relationship()

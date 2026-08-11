@@ -101,6 +101,36 @@ class PromiseOut(PromiseIn, ORMModel):
     days_overdue: int
 
 
+class ActivityIn(BaseModel):
+    activity_type: str = "note"
+    description: str = Field(min_length=2, max_length=2000)
+    follow_up_date: date | None = None
+
+
+class ActivityOut(ActivityIn, ORMModel):
+    id: int
+    customer_id: int
+    user_name: str
+    created_at: datetime
+
+
+class CustomerFileOut(ORMModel):
+    id: int
+    customer_id: int
+    original_name: str
+    content_type: str
+    size: int
+    description: str | None
+    user_name: str
+    created_at: datetime
+
+
+class CustomerDetail(CustomerOut):
+    sales: list[SaleOut]
+    activities: list[ActivityOut]
+    files: list[CustomerFileOut]
+
+
 class DashboardOut(BaseModel):
     total_sales: Decimal
     total_collected: Decimal

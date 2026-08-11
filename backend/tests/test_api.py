@@ -21,5 +21,29 @@ def test_complete_commercial_flow():
         assert payment.status_code == 201
         promise = client.post("/api/promises", headers=headers, json={"sale_id":sale.json()["id"],"amount":6000,"due_date":"2026-08-15","status":"pending"})
         assert promise.status_code == 201
+        activity = client.post(
+            f"/api/customers/{customer.json()['id']}/activities",
+            headers=headers,
+            json={"activity_type": "call", "description": "Cliente confirmó seguimiento", "follow_up_date": "2026-08-20"},
+        )
+        assert activity.status_code == 201
+        upload = client.post(
+            f"/api/customers/{customer.json()['id']}/files",
+            headers=headers,
+            data={"description": "Comprobante demo"},
+            files={"file": ("comprobante.pdf", b"%PDF-1.4 demo", "application/pdf")},
+        )
+        assert upload.status_code == 201
+        download = client.get(f"/api/customer-files/{upload.json()['id']}/download", headers=headers)
+        assert download.status_code == 200 and download.content.startswith(b"%PDF")
+        detail = client.get(f"/api/customers/{customer.json()['id']}", headers=headers)
+        assert detail.status_code == 200
+        assert detail.json()["activities"] and detail.json()["files"]
+        cancellable = client.post("/api/sales", headers=headers, json={"customer_id":customer.json()["id"],"concept":"Venta cancelable","amount":1000,"status":"won","sale_date":"2026-08-11"})
+        cancelled = client.patch(f"/api/sales/{cancellable.json()['id']}/cancel", headers=headers)
+        assert cancelled.status_code == 200 and cancelled.json()["status"] == "cancelled"
+        refused = client.patch(f"/api/sales/{sale.json()['id']}/cancel", headers=headers)
+        assert refused.status_code == 400
         sales = client.get("/api/sales", headers=headers).json()
-        assert sales[0]["balance"] == "12000.00"
+        original = next(item for item in sales if item["id"] == sale.json()["id"])
+        assert original["balance"] == "12000.00"
