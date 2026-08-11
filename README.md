@@ -40,6 +40,16 @@ npm run dev
 
 Abrir `http://localhost:5173`. En desarrollo, las credenciales iniciales provienen de `.env.example` y deben cambiarse antes de usar datos reales.
 
+### Datos de demostración
+
+Con la API detenida o desde otra terminal ubicada en `backend`, ejecutar:
+
+```bash
+PYTHONPATH=. ../.venv/bin/python -m scripts.seed_demo
+```
+
+El comando agrega clientes, prospectos, catálogo, ventas, pagos y promesas con fechas relativas al día de ejecución. Puede repetirse sin duplicar el escenario demo.
+
 ## Producción con Docker
 
 Crear `.env` con valores únicos y seguros:
