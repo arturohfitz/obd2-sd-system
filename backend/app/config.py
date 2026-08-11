@@ -1,1 +1,24 @@
-from functools import lru_cachefrom pydantic_settings import BaseSettings, SettingsConfigDictclass Settings(BaseSettings):    app_name: str = "OBD2 SD System"    environment: str = "development"    secret_key: str = "development-only-change-me"    database_url: str = "sqlite:///./obd2sd.db"    cors_origins: str = "http://localhost:5173,http://localhost:8080"    initial_admin_email: str = "admin@obd2solucionesdiesel.com"    initial_admin_password: str = "CambiarEstaClave123!"    access_token_minutes: int = 480    model_config = SettingsConfigDict(env_file=".env", extra="ignore")    @property    def allowed_origins(self) -> list[str]:        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]@lru_cachedef get_settings() -> Settings:    return Settings()
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    app_name: str = "OBD2 SD System"
+    environment: str = "development"
+    secret_key: str = "development-only-change-me"
+    database_url: str = "sqlite:///./obd2sd.db"
+    cors_origins: str = "http://localhost:5173,http://localhost:8080"
+    initial_admin_email: str = "admin@obd2solucionesdiesel.com"
+    initial_admin_password: str = "CambiarEstaClave123!"
+    access_token_minutes: int = 480
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

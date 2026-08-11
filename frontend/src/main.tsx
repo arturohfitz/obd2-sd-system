@@ -27,8 +27,8 @@ const today = () => new Date().toISOString().slice(0, 10);
 type Page = "dashboard" | "customers" | "sales" | "collections" | "products";
 
 function Login({ done }: { done: () => void }) {
-  const [email, setEmail] = useState("admin@obd2solucionesdiesel.com"),
-    [password, setPassword] = useState("CambiarEstaClave123!"),
+  const [email, setEmail] = useState(""),
+    [password, setPassword] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   async function submit(e: React.FormEvent) {
@@ -62,18 +62,20 @@ function Login({ done }: { done: () => void }) {
         <form onSubmit={submit}>
           <label>
             Correo electrónico
-            <input
-              type="email"
-              value={email}
+          <input
+            type="email"
+            placeholder="nombre@empresa.com"
+            value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
             />
           </label>
           <label>
             Contraseña
-            <input
-              type="password"
-              value={password}
+          <input
+            type="password"
+            placeholder="Ingresa tu contraseña"
+            value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
             />
