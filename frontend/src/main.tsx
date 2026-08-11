@@ -51,7 +51,11 @@ function Login({ done }: { done: () => void }) {
   return (
     <main className="login">
       <section className="login-card">
-        <div className="brand-mark">SD</div>
+        <img
+          className="brand-logo-icon"
+          src="/brand/obd2-soluciones-diesel-icon.png"
+          alt="OBD2 Soluciones Diésel"
+        />
         <p className="eyebrow">OBD2 SOLUCIONES DIÉSEL</p>
         <h1>
           Control comercial,
@@ -164,11 +168,11 @@ function Portal({ logout }: { logout: () => void }) {
     <div className="shell">
       <aside className={mobile ? "sidebar open" : "sidebar"}>
         <div className="side-brand">
-          <div className="brand-mark small">SD</div>
-          <div>
-            <b>OBD2 SD</b>
-            <span>SYSTEM</span>
-          </div>
+          <img
+            className="brand-logo-horizontal"
+            src="/brand/obd2-soluciones-diesel-logo.png"
+            alt="OBD2 Soluciones Diésel"
+          />
           <button className="icon mobile" onClick={() => setMobile(false)}>
             <X />
           </button>

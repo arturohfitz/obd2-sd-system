@@ -36,22 +36,13 @@ button {
   margin: auto;
   padding: 60px;
 }
-.brand-mark {
-  width: 54px;
-  height: 54px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #1976e9, #0b3c83);
-  color: white;
-  display: grid;
-  place-items: center;
-  font: 800 20px "Manrope", sans-serif;
-  box-shadow: 0 10px 30px #1567d338;
-}
-.brand-mark.small {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  font-size: 16px;
+.brand-logo-icon {
+  display: block;
+  width: 82px;
+  height: 82px;
+  border-radius: 50%;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 20px #0f172a22);
 }
 .eyebrow {
   font-size: 11px !important;
@@ -174,14 +165,10 @@ button {
   gap: 12px;
   padding: 0 8px 28px;
 }
-.side-brand b {
-  display: block;
-  font: 700 16px "Manrope", sans-serif;
-}
-.side-brand span {
-  font-size: 10px;
-  letter-spacing: 2.5px;
-  color: #7f92ab;
+.brand-logo-horizontal {
+  width: 178px;
+  height: auto;
+  object-fit: contain;
 }
 .sidebar nav {
   display: grid;
