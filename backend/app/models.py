@@ -28,6 +28,16 @@ class PromiseStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 
+class OpportunityStage(str, enum.Enum):
+    new = "new"
+    contacted = "contacted"
+    qualified = "qualified"
+    quoted = "quoted"
+    negotiation = "negotiation"
+    won = "won"
+    lost = "lost"
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -135,3 +145,29 @@ class CustomerFile(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     customer: Mapped[Customer] = relationship(back_populates="files")
     user: Mapped[User] = relationship()
+
+
+class CustomerOwner(Base):
+    __tablename__ = "customer_owners"
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    customer: Mapped[Customer] = relationship()
+    user: Mapped[User] = relationship()
+
+
+class Opportunity(Base):
+    __tablename__ = "opportunities"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(220))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
+    stage: Mapped[OpportunityStage] = mapped_column(Enum(OpportunityStage), default=OpportunityStage.new, index=True)
+    next_action: Mapped[str | None] = mapped_column(String(255))
+    next_action_date: Mapped[date | None] = mapped_column(Date, index=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    customer: Mapped[Customer] = relationship()
+    owner: Mapped[User] = relationship()

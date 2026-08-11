@@ -14,6 +14,8 @@ Portal web responsive para el control comercial, servicios, pagos, fechas promes
 - Notas, llamadas y próximos seguimientos por cliente.
 - Documentos privados con descarga autenticada (PDF e imágenes).
 - Acceso directo a WhatsApp y cancelación controlada de ventas sin pagos.
+- Usuarios con roles de administración, ventas, cobranza y consulta.
+- Embudo de oportunidades y agenda comercial por responsable.
 - Diseño adaptable a computadora, tablet y celular.
 - API protegida con autenticación y perfiles preparados para ampliación.
 
@@ -54,6 +56,13 @@ PYTHONPATH=. ../.venv/bin/python -m scripts.seed_demo
 
 El comando agrega clientes, prospectos, catálogo, ventas, pagos y promesas con fechas relativas al día de ejecución. Puede repetirse sin duplicar el escenario demo.
 
+También crea oportunidades comerciales y dos cuentas locales para probar permisos:
+
+- Ventas: `ventas.demo@obd2solucionesdiesel.com` / `DemoVentas2026!`
+- Cobranza: `cobranza.demo@obd2solucionesdiesel.com` / `DemoCobranza2026!`
+
+Estas credenciales son exclusivamente demostrativas y no deben utilizarse en producción.
+
 ## Ficha integral del cliente
 
 Desde **Clientes**, seleccionar cualquier fila para abrir su ficha. La vista reúne:
@@ -65,6 +74,15 @@ Desde **Clientes**, seleccionar cualquier fila para abrir su ficha. La vista re�
 - Botón para iniciar conversación en WhatsApp.
 
 Los documentos se guardan fuera del frontend y solo pueden descargarse mediante una sesión autenticada. En Docker se conservan en el volumen `uploads_data`.
+
+## Roles y operación comercial
+
+- **Administrador:** configuración, usuarios y acceso completo.
+- **Ventas:** clientes, actividades, responsables, oportunidades y ventas.
+- **Cobranza:** pagos, promesas, actividades y documentos.
+- **Consulta:** acceso de solo lectura.
+
+El módulo **Oportunidades** organiza el proceso en Nuevo, Contactado, Necesidad, Cotizado, Negociación, Ganado y Perdido. Cada oportunidad conserva responsable, valor estimado, próxima acción y fecha; la vista **Mi agenda** muestra únicamente los compromisos del usuario autenticado.
 
 ## Producción con Docker
 

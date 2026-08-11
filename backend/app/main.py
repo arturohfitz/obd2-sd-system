@@ -9,11 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
-from .auth import create_token, current_user, hash_password, verify_password
+from .auth import create_token, current_user, hash_password, require_roles, verify_password
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
-from .models import Customer, CustomerActivity, CustomerFile, CustomerStatus, Payment, PaymentPromise, Product, PromiseStatus, Sale, SaleStatus, User
-from .schemas import ActivityIn, ActivityOut, CustomerDetail, CustomerFileOut, CustomerIn, CustomerOut, DashboardOut, LoginIn, LoginOut, PaymentIn, PaymentOut, ProductIn, ProductOut, PromiseIn, PromiseOut, SaleIn, SaleOut, UserOut
+from .models import Customer, CustomerActivity, CustomerFile, CustomerOwner, CustomerStatus, Opportunity, OpportunityStage, Payment, PaymentPromise, Product, PromiseStatus, Sale, SaleStatus, User
+from .schemas import ActivityIn, ActivityOut, AdminPasswordReset, CustomerDetail, CustomerFileOut, CustomerIn, CustomerOut, CustomerOwnerOut, DashboardOut, LoginIn, LoginOut, OpportunityIn, OpportunityOut, OwnerAssignment, PasswordChange, PaymentIn, PaymentOut, ProductIn, ProductOut, PromiseIn, PromiseOut, SaleIn, SaleOut, UserCreate, UserOut, UserUpdate
 
 
 settings = get_settings()
@@ -45,6 +45,14 @@ def customer_balance(customer: Customer) -> Decimal:
         Decimal("0"),
     )
     return max(balance, Decimal("0"))
+
+
+def opportunity_out(item: Opportunity) -> OpportunityOut:
+    return OpportunityOut.model_validate({
+        **item.__dict__,
+        "customer_name": item.customer.name,
+        "owner_name": item.owner.name,
+    })
 
 
 def sale_out(sale: Sale) -> SaleOut:
@@ -101,6 +109,57 @@ def me(user: User = Depends(current_user)):
     return user
 
 
+@app.patch("/api/auth/password")
+def change_password(data: PasswordChange, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    if not verify_password(data.current_password, user.password_hash):
+        raise HTTPException(400, "La contraseña actual no es correcta")
+    user.password_hash = hash_password(data.new_password)
+    db.commit()
+    return {"message": "Contraseña actualizada"}
+
+
+@app.get("/api/users", response_model=list[UserOut])
+def users(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    return db.scalars(select(User).order_by(User.active.desc(), User.name)).all()
+
+
+@app.post("/api/users", response_model=UserOut, status_code=201)
+def create_user(data: UserCreate, db: Session = Depends(get_db), _: User = Depends(require_roles("admin"))):
+    roles = {"admin", "sales", "collections", "viewer"}
+    if data.role not in roles:
+        raise HTTPException(400, "Rol no válido")
+    email = data.email.lower()
+    if db.scalar(select(User).where(User.email == email)):
+        raise HTTPException(409, "Ya existe un usuario con ese correo")
+    item = User(name=data.name, email=email, password_hash=hash_password(data.password), role=data.role)
+    db.add(item); db.commit(); db.refresh(item)
+    return item
+
+
+@app.patch("/api/users/{user_id}", response_model=UserOut)
+def update_user(user_id: int, data: UserUpdate, db: Session = Depends(get_db), admin: User = Depends(require_roles("admin"))):
+    item = db.get(User, user_id)
+    if not item:
+        raise HTTPException(404, "Usuario no encontrado")
+    if item.id == admin.id and not data.active:
+        raise HTTPException(400, "No puedes desactivar tu propia cuenta")
+    if data.role not in {"admin", "sales", "collections", "viewer"}:
+        raise HTTPException(400, "Rol no válido")
+    item.name, item.role, item.active = data.name, data.role, data.active
+    db.commit(); db.refresh(item)
+    return item
+
+
+@app.patch("/api/users/{user_id}/password")
+def reset_user_password(user_id: int, data: AdminPasswordReset, db: Session = Depends(get_db), _: User = Depends(require_roles("admin"))):
+    item = db.get(User, user_id)
+    if not item:
+        raise HTTPException(404, "Usuario no encontrado")
+    item.password_hash = hash_password(data.new_password)
+    db.commit()
+    return {"message": "Contraseña restablecida"}
+
+
 @app.get("/api/customers", response_model=list[CustomerOut])
 def customers(search: str = Query("", max_length=100), db: Session = Depends(get_db), _: User = Depends(current_user)):
     query = select(Customer).options(selectinload(Customer.sales).selectinload(Sale.payments)).order_by(Customer.created_at.desc())
@@ -140,7 +199,7 @@ def customer_detail(customer_id: int, db: Session = Depends(get_db), _: User = D
 
 
 @app.post("/api/customers", response_model=CustomerOut, status_code=201)
-def create_customer(data: CustomerIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def create_customer(data: CustomerIn, db: Session = Depends(get_db), user: User = Depends(require_roles("admin", "sales"))):
     phone = "".join(char for char in data.phone if char.isdigit())
     if db.scalar(select(Customer).where(Customer.phone == phone)):
         raise HTTPException(status_code=409, detail="Ya existe un cliente con ese teléfono")
@@ -152,7 +211,7 @@ def create_customer(data: CustomerIn, db: Session = Depends(get_db), user: User 
 
 
 @app.patch("/api/customers/{customer_id}", response_model=CustomerOut)
-def update_customer(customer_id: int, data: CustomerIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def update_customer(customer_id: int, data: CustomerIn, db: Session = Depends(get_db), user: User = Depends(require_roles("admin", "sales"))):
     item = db.scalar(select(Customer).where(Customer.id == customer_id).options(selectinload(Customer.sales).selectinload(Sale.payments)))
     if not item: raise HTTPException(404, "Cliente no encontrado")
     values = data.model_dump(); values["phone"] = "".join(c for c in data.phone if c.isdigit())
@@ -163,7 +222,7 @@ def update_customer(customer_id: int, data: CustomerIn, db: Session = Depends(ge
 
 
 @app.post("/api/customers/{customer_id}/activities", response_model=ActivityOut, status_code=201)
-def create_activity(customer_id: int, data: ActivityIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def create_activity(customer_id: int, data: ActivityIn, db: Session = Depends(get_db), user: User = Depends(require_roles("admin", "sales", "collections"))):
     customer = db.get(Customer, customer_id)
     if not customer:
         raise HTTPException(404, "Cliente no encontrado")
@@ -181,7 +240,7 @@ async def upload_customer_file(
     file: UploadFile = File(...),
     description: str | None = Form(None),
     db: Session = Depends(get_db),
-    user: User = Depends(current_user),
+    user: User = Depends(require_roles("admin", "sales", "collections")),
 ):
     if not db.get(Customer, customer_id):
         raise HTTPException(404, "Cliente no encontrado")
@@ -231,7 +290,7 @@ def products(db: Session = Depends(get_db), _: User = Depends(current_user)):
 
 
 @app.post("/api/products", response_model=ProductOut, status_code=201)
-def create_product(data: ProductIn, db: Session = Depends(get_db), _: User = Depends(current_user)):
+def create_product(data: ProductIn, db: Session = Depends(get_db), _: User = Depends(require_roles("admin"))):
     item = Product(**data.model_dump()); db.add(item); db.commit(); db.refresh(item); return item
 
 
@@ -242,7 +301,7 @@ def sales(db: Session = Depends(get_db), _: User = Depends(current_user)):
 
 
 @app.post("/api/sales", response_model=SaleOut, status_code=201)
-def create_sale(data: SaleIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def create_sale(data: SaleIn, db: Session = Depends(get_db), user: User = Depends(require_roles("admin", "sales"))):
     if not db.get(Customer, data.customer_id): raise HTTPException(404, "Cliente no encontrado")
     item = Sale(**data.model_dump()); db.add(item); db.flush()
     log_activity(db, item.customer_id, user.id, "sale", f"Venta registrada: {item.concept} por {money(item.amount)} MXN.")
@@ -252,7 +311,7 @@ def create_sale(data: SaleIn, db: Session = Depends(get_db), user: User = Depend
 
 
 @app.post("/api/payments", response_model=PaymentOut, status_code=201)
-def create_payment(data: PaymentIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def create_payment(data: PaymentIn, db: Session = Depends(get_db), user: User = Depends(require_roles("admin", "collections"))):
     sale = db.scalar(select(Sale).where(Sale.id == data.sale_id).options(selectinload(Sale.payments)))
     if not sale: raise HTTPException(404, "Venta no encontrada")
     balance = money(sale.amount) - sum((money(p.amount) for p in sale.payments), Decimal("0"))
@@ -264,7 +323,7 @@ def create_payment(data: PaymentIn, db: Session = Depends(get_db), user: User = 
 
 
 @app.patch("/api/sales/{sale_id}/cancel", response_model=SaleOut)
-def cancel_sale(sale_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def cancel_sale(sale_id: int, db: Session = Depends(get_db), user: User = Depends(require_roles("admin"))):
     sale = db.scalar(select(Sale).where(Sale.id == sale_id).options(selectinload(Sale.customer), selectinload(Sale.payments)))
     if not sale:
         raise HTTPException(404, "Venta no encontrada")
@@ -283,7 +342,7 @@ def promises(db: Session = Depends(get_db), _: User = Depends(current_user)):
 
 
 @app.post("/api/promises", response_model=PromiseOut, status_code=201)
-def create_promise(data: PromiseIn, db: Session = Depends(get_db), _: User = Depends(current_user)):
+def create_promise(data: PromiseIn, db: Session = Depends(get_db), _: User = Depends(require_roles("admin", "collections"))):
     sale = db.scalar(select(Sale).where(Sale.id == data.sale_id).options(selectinload(Sale.customer)))
     if not sale: raise HTTPException(404, "Venta no encontrada")
     item = PaymentPromise(**data.model_dump()); db.add(item); db.commit(); db.refresh(item); item.sale = sale
@@ -291,10 +350,93 @@ def create_promise(data: PromiseIn, db: Session = Depends(get_db), _: User = Dep
 
 
 @app.patch("/api/promises/{promise_id}/paid", response_model=PromiseOut)
-def mark_promise_paid(promise_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+def mark_promise_paid(promise_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles("admin", "collections"))):
     item = db.scalar(select(PaymentPromise).where(PaymentPromise.id == promise_id).options(selectinload(PaymentPromise.sale).selectinload(Sale.customer)))
     if not item: raise HTTPException(404, "Promesa no encontrada")
     item.status = PromiseStatus.paid; db.commit(); return promise_out(item)
+
+
+@app.get("/api/customers/{customer_id}/owner", response_model=CustomerOwnerOut | None)
+def customer_owner(customer_id: int, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    item = db.scalar(select(CustomerOwner).where(CustomerOwner.customer_id == customer_id).options(selectinload(CustomerOwner.user)))
+    if not item:
+        return None
+    return CustomerOwnerOut(customer_id=item.customer_id, user_id=item.user_id, user_name=item.user.name)
+
+
+@app.put("/api/customers/{customer_id}/owner", response_model=CustomerOwnerOut)
+def assign_customer_owner(customer_id: int, data: OwnerAssignment, db: Session = Depends(get_db), actor: User = Depends(require_roles("admin", "sales"))):
+    if not db.get(Customer, customer_id):
+        raise HTTPException(404, "Cliente no encontrado")
+    owner = db.get(User, data.user_id)
+    if not owner or not owner.active:
+        raise HTTPException(400, "El responsable no está disponible")
+    item = db.get(CustomerOwner, customer_id)
+    if item:
+        item.user_id = data.user_id
+    else:
+        item = CustomerOwner(customer_id=customer_id, user_id=data.user_id)
+        db.add(item)
+    log_activity(db, customer_id, actor.id, "assignment", f"Cliente asignado a {owner.name}.")
+    db.commit()
+    return CustomerOwnerOut(customer_id=customer_id, user_id=owner.id, user_name=owner.name)
+
+
+@app.get("/api/opportunities", response_model=list[OpportunityOut])
+def opportunities(mine: bool = False, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    query = select(Opportunity).options(selectinload(Opportunity.customer), selectinload(Opportunity.owner)).order_by(Opportunity.updated_at.desc())
+    if mine:
+        query = query.where(Opportunity.owner_id == user.id)
+    return [opportunity_out(item) for item in db.scalars(query)]
+
+
+@app.post("/api/opportunities", response_model=OpportunityOut, status_code=201)
+def create_opportunity(data: OpportunityIn, db: Session = Depends(get_db), actor: User = Depends(require_roles("admin", "sales"))):
+    customer = db.get(Customer, data.customer_id)
+    owner = db.get(User, data.owner_id)
+    if not customer:
+        raise HTTPException(404, "Cliente no encontrado")
+    if not owner or not owner.active:
+        raise HTTPException(400, "Responsable no disponible")
+    item = Opportunity(**data.model_dump())
+    db.add(item); db.flush()
+    log_activity(db, customer.id, actor.id, "opportunity", f"Oportunidad creada: {item.title} por {money(item.amount)} MXN.", item.next_action_date)
+    db.commit()
+    item = db.scalar(select(Opportunity).where(Opportunity.id == item.id).options(selectinload(Opportunity.customer), selectinload(Opportunity.owner)))
+    return opportunity_out(item)
+
+
+@app.patch("/api/opportunities/{opportunity_id}", response_model=OpportunityOut)
+def update_opportunity(opportunity_id: int, data: OpportunityIn, db: Session = Depends(get_db), actor: User = Depends(require_roles("admin", "sales"))):
+    item = db.get(Opportunity, opportunity_id)
+    if not item:
+        raise HTTPException(404, "Oportunidad no encontrada")
+    owner = db.get(User, data.owner_id)
+    if not owner or not owner.active:
+        raise HTTPException(400, "Responsable no disponible")
+    old_stage = item.stage
+    for key, value in data.model_dump().items():
+        setattr(item, key, value)
+    if old_stage != item.stage:
+        log_activity(db, item.customer_id, actor.id, "opportunity", f"Oportunidad movida de {old_stage.value} a {item.stage.value}.", item.next_action_date)
+    db.commit()
+    item = db.scalar(select(Opportunity).where(Opportunity.id == item.id).options(selectinload(Opportunity.customer), selectinload(Opportunity.owner)))
+    return opportunity_out(item)
+
+
+@app.get("/api/agenda", response_model=list[OpportunityOut])
+def agenda(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    query = (
+        select(Opportunity)
+        .where(
+            Opportunity.owner_id == user.id,
+            Opportunity.next_action_date.is_not(None),
+            Opportunity.stage.not_in([OpportunityStage.won, OpportunityStage.lost]),
+        )
+        .options(selectinload(Opportunity.customer), selectinload(Opportunity.owner))
+        .order_by(Opportunity.next_action_date)
+    )
+    return [opportunity_out(item) for item in db.scalars(query)]
 
 
 @app.get("/api/dashboard", response_model=DashboardOut)

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from .models import CustomerStatus, PromiseStatus, SaleStatus
+from .models import CustomerStatus, OpportunityStage, PromiseStatus, SaleStatus
 
 
 class ORMModel(BaseModel):
@@ -20,6 +20,29 @@ class UserOut(ORMModel):
     name: str
     email: str
     role: str
+    active: bool
+
+
+class UserCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    email: EmailStr
+    password: str = Field(min_length=10, max_length=128)
+    role: str = "sales"
+
+
+class UserUpdate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    role: str
+    active: bool
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=10, max_length=128)
+
+
+class AdminPasswordReset(BaseModel):
+    new_password: str = Field(min_length=10, max_length=128)
 
 
 class LoginOut(BaseModel):
@@ -129,6 +152,35 @@ class CustomerDetail(CustomerOut):
     sales: list[SaleOut]
     activities: list[ActivityOut]
     files: list[CustomerFileOut]
+
+
+class OwnerAssignment(BaseModel):
+    user_id: int
+
+
+class OpportunityIn(BaseModel):
+    customer_id: int
+    owner_id: int
+    title: str = Field(min_length=2, max_length=220)
+    amount: Decimal = Field(ge=0)
+    stage: OpportunityStage = OpportunityStage.new
+    next_action: str | None = None
+    next_action_date: date | None = None
+    notes: str | None = None
+
+
+class OpportunityOut(OpportunityIn, ORMModel):
+    id: int
+    customer_name: str
+    owner_name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class CustomerOwnerOut(BaseModel):
+    customer_id: int
+    user_id: int
+    user_name: str
 
 
 class DashboardOut(BaseModel):

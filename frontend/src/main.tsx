@@ -4,11 +4,13 @@ import {
   BarChart3,
   BriefcaseBusiness,
   CalendarClock,
+  CalendarDays,
   ChevronRight,
   ClipboardList,
   Clock,
   Download,
   FileText,
+  KanbanSquare,
   LogOut,
   Menu,
   MessageCircle,
@@ -18,11 +20,12 @@ import {
   Plus,
   Search,
   Users,
+  UserCog,
   WalletCards,
   X,
 } from "lucide-react";
 import { api, apiForm, downloadFile } from "./api";
-import type { Customer, CustomerDetail, Dashboard, Product, PromiseItem, Sale } from "./types";
+import type { Customer, CustomerDetail, Dashboard, Opportunity, Product, PromiseItem, Sale, User } from "./types";
 import "./styles.css";
 
 const money = (n: number) =>
@@ -30,7 +33,7 @@ const money = (n: number) =>
     n || 0,
   );
 const today = () => new Date().toISOString().slice(0, 10);
-type Page = "dashboard" | "customers" | "sales" | "collections" | "products";
+type Page = "dashboard" | "customers" | "pipeline" | "agenda" | "sales" | "collections" | "products" | "users";
 
 function Login({ done }: { done: () => void }) {
   const [email, setEmail] = useState(""),
@@ -162,14 +165,19 @@ function App() {
 }
 function Portal({ logout }: { logout: () => void }) {
   const [page, setPage] = useState<Page>("dashboard"),
-    [mobile, setMobile] = useState(false);
-  const nav = [
+    [mobile, setMobile] = useState(false),
+    [user, setUser] = useState<User | null>(null);
+  useEffect(() => { api<User>("/api/auth/me").then(setUser); }, []);
+  const nav: Array<readonly [Page, string, typeof BarChart3]> = [
     ["dashboard", "Resumen", BarChart3],
     ["customers", "Clientes", Users],
+    ["pipeline", "Oportunidades", KanbanSquare],
+    ["agenda", "Mi agenda", CalendarDays],
     ["sales", "Ventas y servicios", BriefcaseBusiness],
     ["collections", "Cobranza", WalletCards],
     ["products", "Catálogo", Package],
-  ] as const;
+    ...(user?.role === "admin" ? [["users", "Usuarios", UserCog] as const] : []),
+  ];
   return (
     <div className="shell">
       <aside className={mobile ? "sidebar open" : "sidebar"}>
@@ -221,7 +229,7 @@ function Portal({ logout }: { logout: () => void }) {
             </p>
             <h2>{nav.find((x) => x[0] === page)?.[1]}</h2>
           </div>
-          <div className="avatar">AD</div>
+          <div className="avatar" title={user?.name}>{user?.name.split(" ").map((x) => x[0]).slice(0,2).join("") || "--"}</div>
         </header>
         <PageContent page={page} />
       </main>
@@ -232,9 +240,12 @@ function Portal({ logout }: { logout: () => void }) {
 function PageContent({ page }: { page: Page }) {
   if (page === "dashboard") return <DashboardPage />;
   if (page === "customers") return <Customers />;
+  if (page === "pipeline") return <Pipeline />;
+  if (page === "agenda") return <Agenda />;
   if (page === "sales") return <Sales />;
   if (page === "collections") return <Collections />;
-  return <Products />;
+  if (page === "products") return <Products />;
+  return <UserManagement />;
 }
 function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null),
@@ -459,10 +470,14 @@ function CustomerProfile({
     [tab, setTab] = useState<"account" | "history" | "files">("account"),
     [editing, setEditing] = useState(false),
     [addingActivity, setAddingActivity] = useState(false),
-    [addingFile, setAddingFile] = useState(false);
+    [addingFile, setAddingFile] = useState(false),
+    [users, setUsers] = useState<User[]>([]),
+    [ownerId, setOwnerId] = useState<number | "">("");
   const load = () => api<CustomerDetail>(`/api/customers/${customerId}`).then(setData);
   useEffect(() => {
     void load();
+    api<User[]>("/api/users").then((items) => setUsers(items.filter((user) => user.active)));
+    api<{user_id:number} | null>(`/api/customers/${customerId}/owner`).then((owner) => setOwnerId(owner?.user_id || ""));
   }, [customerId]);
   if (!data) return <div className="overlay"><div className="profile-loading">Cargando ficha…</div></div>;
 
@@ -496,6 +511,11 @@ function CustomerProfile({
     catch (error) { window.alert((error as Error).message); }
   }
   const whatsappPhone = data.phone.startsWith("52") ? data.phone : `52${data.phone}`;
+  async function assignOwner(value: string) {
+    if (!value) return;
+    try { await api(`/api/customers/${customerId}/owner`, {method:"PUT",body:JSON.stringify({user_id:Number(value)})}); setOwnerId(Number(value)); await load(); }
+    catch (error) { window.alert((error as Error).message); }
+  }
   return (
     <div className="overlay profile-overlay" onMouseDown={close}>
       <section className="customer-profile" onMouseDown={(e) => e.stopPropagation()}>
@@ -508,7 +528,7 @@ function CustomerProfile({
             <button className="icon" onClick={close}><X/></button>
           </div>
         </header>
-        <div className="profile-contact"><span><Phone size={15}/>{data.phone}</span><span>{data.email || "Sin correo registrado"}</span>{data.next_follow_up && <span><Clock size={15}/>Seguimiento: {data.next_follow_up}</span>}</div>
+        <div className="profile-contact"><span><Phone size={15}/>{data.phone}</span><span>{data.email || "Sin correo registrado"}</span>{data.next_follow_up && <span><Clock size={15}/>Seguimiento: {data.next_follow_up}</span>}<label className="owner-select">Responsable<select value={ownerId} onChange={(e) => assignOwner(e.target.value)}><option value="">Sin asignar</option>{users.map((user) => <option value={user.id} key={user.id}>{user.name}</option>)}</select></label></div>
         <section className="profile-metrics"><div><span>Ventas</span><strong>{money(data.sales.filter((sale) => sale.status === "won").reduce((sum, sale) => sum + Number(sale.amount), 0))}</strong></div><div><span>Pagado</span><strong>{money(data.sales.reduce((sum, sale) => sum + Number(sale.paid), 0))}</strong></div><div className="metric-owed"><span>Saldo pendiente</span><strong>{money(data.balance)}</strong></div><div><span>Operaciones</span><strong>{data.sales.length}</strong></div></section>
         <nav className="profile-tabs"><button className={tab === "account" ? "active" : ""} onClick={() => setTab("account")}>Estado de cuenta</button><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Historial <span>{data.activities.length}</span></button><button className={tab === "files" ? "active" : ""} onClick={() => setTab("files")}>Documentos <span>{data.files.length}</span></button></nav>
         <div className="profile-body">
@@ -924,6 +944,46 @@ function Products() {
       )}
     </>
   );
+}
+
+const opportunityStages = [
+  ["new", "Nuevo"], ["contacted", "Contactado"], ["qualified", "Necesidad"],
+  ["quoted", "Cotizado"], ["negotiation", "Negociación"], ["won", "Ganado"], ["lost", "Perdido"],
+] as const;
+
+function Pipeline() {
+  const [items, setItems] = useState<Opportunity[]>([]), [customers, setCustomers] = useState<Customer[]>([]),
+    [users, setUsers] = useState<User[]>([]), [open, setOpen] = useState(false);
+  const load = () => api<Opportunity[]>("/api/opportunities").then(setItems);
+  useEffect(() => { void load(); api<Customer[]>("/api/customers").then(setCustomers); api<User[]>("/api/users").then((x) => setUsers(x.filter((u) => u.active))); }, []);
+  async function create(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault(); const form = new FormData(e.currentTarget);
+    await api("/api/opportunities", {method:"POST", body:JSON.stringify({customer_id:Number(form.get("customer_id")),owner_id:Number(form.get("owner_id")),title:form.get("title"),amount:Number(form.get("amount")),stage:form.get("stage"),next_action:form.get("next_action")||null,next_action_date:form.get("next_action_date")||null,notes:form.get("notes")||null})});
+    setOpen(false); await load();
+  }
+  async function move(item: Opportunity, stage: Opportunity["stage"]) {
+    try { await api(`/api/opportunities/${item.id}`, {method:"PATCH", body:JSON.stringify({...item,stage})}); await load(); }
+    catch (error) { window.alert((error as Error).message); }
+  }
+  return <><ActionHeader title="Oportunidades" text="Seguimiento comercial desde el primer contacto hasta el cierre." action="Nueva oportunidad" click={() => setOpen(true)}/><section className="pipeline-summary"><div><span>Pipeline abierto</span><strong>{money(items.filter((x) => !["won","lost"].includes(x.stage)).reduce((s,x) => s + Number(x.amount),0))}</strong></div><div><span>Oportunidades activas</span><strong>{items.filter((x) => !["won","lost"].includes(x.stage)).length}</strong></div><div><span>Ganado</span><strong>{money(items.filter((x) => x.stage === "won").reduce((s,x) => s + Number(x.amount),0))}</strong></div></section><div className="kanban">{opportunityStages.map(([stage,label]) => <section className="kanban-column" key={stage}><header><b>{label}</b><span>{items.filter((x) => x.stage === stage).length}</span></header><div>{items.filter((x) => x.stage === stage).map((item) => <article className="opportunity-card" key={item.id}><p>{item.customer_name}</p><h3>{item.title}</h3><strong>{money(item.amount)}</strong><small>{item.next_action_date ? `${item.next_action_date} · ` : ""}{item.next_action || "Sin próxima acción"}</small><footer><span>{item.owner_name}</span><select value={item.stage} onChange={(e) => move(item,e.target.value as Opportunity["stage"])}>{opportunityStages.map(([value,text]) => <option value={value} key={value}>{text}</option>)}</select></footer></article>)}</div></section>)}</div>{open && <Modal title="Nueva oportunidad" close={() => setOpen(false)}><form className="form" onSubmit={create}><label>Cliente<select name="customer_id" required><option value="">Seleccionar…</option>{customers.map((c) => <option value={c.id} key={c.id}>{c.name} · {c.company}</option>)}</select></label><Field label="Oportunidad" name="title" placeholder="Ej. Kit de diagnóstico para flota" required/><div className="row"><Field label="Valor estimado" name="amount" type="number" min="0" required/><label>Etapa<select name="stage">{opportunityStages.map(([value,text]) => <option value={value} key={value}>{text}</option>)}</select></label></div><label>Responsable<select name="owner_id" required><option value="">Seleccionar…</option>{users.map((u) => <option value={u.id} key={u.id}>{u.name}</option>)}</select></label><Field label="Próxima acción" name="next_action" placeholder="Llamar para revisar cotización"/><Field label="Fecha de próxima acción" name="next_action_date" type="date"/><label>Notas<textarea name="notes" rows={3}/></label><Submit/></form></Modal>}</>;
+}
+
+function Agenda() {
+  const [items,setItems] = useState<Opportunity[]>([]);
+  useEffect(() => { api<Opportunity[]>("/api/agenda").then(setItems); }, []);
+  const now = today();
+  return <><section className="action-head"><div><h1>Mi agenda</h1><p>Acciones comerciales asignadas a tu usuario.</p></div></section><div className="agenda-list">{items.map((item) => <article className={item.next_action_date && item.next_action_date < now ? "overdue-action" : ""} key={item.id}><div className="agenda-date"><CalendarDays/><b>{item.next_action_date}</b></div><div><span className="eyebrow">{item.customer_name}</span><h3>{item.next_action || item.title}</h3><p>{item.title} · {money(item.amount)}</p></div><span className={`stage-badge ${item.stage}`}>{opportunityStages.find((x) => x[0] === item.stage)?.[1]}</span></article>)}{!items.length && <Empty text="No tienes acciones comerciales programadas."/>}</div></>;
+}
+
+function UserManagement() {
+  const [items,setItems] = useState<User[]>([]), [open,setOpen] = useState(false);
+  const load = () => api<User[]>("/api/users").then(setItems);
+  useEffect(() => { void load(); }, []);
+  const roleName:Record<string,string>={admin:"Administrador",sales:"Ventas",collections:"Cobranza",viewer:"Consulta"};
+  async function create(e:React.FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);try{await api("/api/users",{method:"POST",body:JSON.stringify({name:f.get("name"),email:f.get("email"),password:f.get("password"),role:f.get("role")})});setOpen(false);await load()}catch(error){window.alert((error as Error).message)}}
+  async function toggle(user:User){try{await api(`/api/users/${user.id}`,{method:"PATCH",body:JSON.stringify({name:user.name,role:user.role,active:!user.active})});await load()}catch(error){window.alert((error as Error).message)}}
+  async function reset(user:User){const password=window.prompt(`Nueva contraseña temporal para ${user.name} (mínimo 10 caracteres):`);if(!password)return;try{await api(`/api/users/${user.id}/password`,{method:"PATCH",body:JSON.stringify({new_password:password})});window.alert("Contraseña actualizada") }catch(error){window.alert((error as Error).message)}}
+  return <><ActionHeader title="Usuarios" text="Accesos, roles y responsables del sistema." action="Nuevo usuario" click={() => setOpen(true)}/><div className="table-card"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{items.map((user) => <tr key={user.id}><td><b>{user.name}</b><small>{user.email}</small></td><td><span className="role-pill">{roleName[user.role]}</span></td><td><span className={`pill ${user.active ? "active" : "inactive"}`}>{user.active ? "Activo" : "Desactivado"}</span></td><td><button className="link" onClick={() => reset(user)}>Contraseña</button><button className={`link ${user.active ? "danger-link" : ""}`} onClick={() => toggle(user)}>{user.active ? "Desactivar" : "Activar"}</button></td></tr>)}</tbody></table></div>{open && <Modal title="Nuevo usuario" close={() => setOpen(false)}><form className="form" onSubmit={create}><Field label="Nombre completo" name="name" required/><Field label="Correo electrónico" name="email" type="email" required/><Field label="Contraseña temporal" name="password" type="password" minLength={10} required/><label>Rol<select name="role"><option value="sales">Ventas</option><option value="collections">Cobranza</option><option value="viewer">Solo consulta</option><option value="admin">Administrador</option></select></label><div className="role-help"><b>Ventas:</b> clientes y oportunidades. <b>Cobranza:</b> pagos y compromisos. <b>Consulta:</b> acceso sin cambios.</div><Submit/></form></Modal>}</>;
 }
 
 function ActionHeader({

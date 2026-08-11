@@ -5,16 +5,21 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
+from app.auth import hash_password
 from app.database import Base, SessionLocal, engine
 from app.models import (
     Customer,
+    CustomerOwner,
     CustomerStatus,
     Payment,
     PaymentPromise,
     Product,
+    Opportunity,
+    OpportunityStage,
     PromiseStatus,
     Sale,
     SaleStatus,
+    User,
 )
 
 
@@ -87,6 +92,17 @@ def seed_demo() -> dict[str, int]:
     with SessionLocal() as db:
         products = [get_or_create_product(db, *item) for item in PRODUCTS]
         customers = [get_or_create_customer(db, *item) for item in CUSTOMERS]
+        sales_user = db.scalar(select(User).where(User.email == "ventas.demo@obd2solucionesdiesel.com"))
+        if not sales_user:
+            sales_user = User(name="Andrea Ventas", email="ventas.demo@obd2solucionesdiesel.com", password_hash=hash_password("DemoVentas2026!"), role="sales")
+            db.add(sales_user); db.flush()
+        collections_user = db.scalar(select(User).where(User.email == "cobranza.demo@obd2solucionesdiesel.com"))
+        if not collections_user:
+            collections_user = User(name="Marco Cobranza", email="cobranza.demo@obd2solucionesdiesel.com", password_hash=hash_password("DemoCobranza2026!"), role="collections")
+            db.add(collections_user); db.flush()
+        for customer in customers[:4]:
+            if not db.get(CustomerOwner, customer.id):
+                db.add(CustomerOwner(customer_id=customer.id, user_id=sales_user.id))
 
         existing_demo_sale = db.scalar(select(Sale).where(Sale.notes.like(f"%{DEMO_MARKER}%")))
         created_sales = 0
@@ -127,11 +143,19 @@ def seed_demo() -> dict[str, int]:
                     )
                 )
                 created_sales += 1
+        existing_opportunity = db.scalar(select(Opportunity).where(Opportunity.notes.like(f"%{DEMO_MARKER}%")))
+        created_opportunities = 0
+        if not existing_opportunity:
+            stages = [OpportunityStage.new, OpportunityStage.contacted, OpportunityStage.qualified, OpportunityStage.quoted, OpportunityStage.negotiation]
+            for index, stage in enumerate(stages):
+                db.add(Opportunity(customer_id=customers[(index + 3) % len(customers)].id, owner_id=sales_user.id, title=["Diagnóstico para nueva unidad", "Renovación de escáner", "Programación de flota", "Kit de diagnóstico completo", "Licencias anuales"][index], amount=Decimal(["8500", "48000", "36000", "72000", "33600"][index]), stage=stage, next_action=["Realizar llamada inicial", "Enviar ficha técnica", "Confirmar número de unidades", "Dar seguimiento a cotización", "Negociar condiciones de pago"][index], next_action_date=date.today() + timedelta(days=index - 1), notes=f"{DEMO_MARKER} Oportunidad comercial de prueba."))
+                created_opportunities += 1
         db.commit()
         return {
             "products": len(products),
             "customers": len(customers),
             "sales_created": created_sales,
+            "opportunities_created": created_opportunities,
         }
 
 
@@ -140,5 +164,5 @@ if __name__ == "__main__":
     print(
         "Datos demo disponibles: "
         f"{result['customers']} clientes, {result['products']} conceptos, "
-        f"{result['sales_created']} ventas nuevas."
+        f"{result['sales_created']} ventas y {result['opportunities_created']} oportunidades nuevas."
     )

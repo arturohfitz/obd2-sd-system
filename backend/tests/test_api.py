@@ -15,6 +15,19 @@ def test_complete_commercial_flow():
         unique_phone = "52" + str(uuid4().int)[:10]
         customer = client.post("/api/customers", headers=headers, json={"name":"Transportes Prueba","company":"Transportes Prueba","phone":unique_phone,"status":"active"})
         assert customer.status_code == 201
+        sales_email = f"ventas-{uuid4().hex[:8]}@example.com"
+        sales_user = client.post("/api/users", headers=headers, json={"name":"Vendedor Prueba","email":sales_email,"password":"VentaSegura123!","role":"sales"})
+        assert sales_user.status_code == 201
+        sales_login = client.post("/api/auth/login", json={"email":sales_email,"password":"VentaSegura123!"})
+        sales_headers = {"Authorization": f"Bearer {sales_login.json()['access_token']}"}
+        forbidden_product = client.post("/api/products", headers=sales_headers, json={"name":f"Restringido {uuid4()}","category":"Producto","price":100})
+        assert forbidden_product.status_code == 403
+        owner = client.put(f"/api/customers/{customer.json()['id']}/owner", headers=headers, json={"user_id":sales_user.json()["id"]})
+        assert owner.status_code == 200
+        opportunity = client.post("/api/opportunities", headers=sales_headers, json={"customer_id":customer.json()["id"],"owner_id":sales_user.json()["id"],"title":"Renovación de equipo","amount":25000,"stage":"quoted","next_action":"Revisar propuesta","next_action_date":"2026-08-20"})
+        assert opportunity.status_code == 201
+        agenda = client.get("/api/agenda", headers=sales_headers)
+        assert agenda.status_code == 200 and any(item["id"] == opportunity.json()["id"] for item in agenda.json())
         sale = client.post("/api/sales", headers=headers, json={"customer_id":customer.json()["id"],"concept":"Diagnóstico de unidad","amount":18000,"status":"won","sale_date":"2026-08-11"})
         assert sale.status_code == 201 and sale.json()["balance"] == "18000.00"
         payment = client.post("/api/payments", headers=headers, json={"sale_id":sale.json()["id"],"amount":6000,"paid_at":"2026-08-11","method":"Transferencia"})

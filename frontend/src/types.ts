@@ -6,3 +6,5 @@ export type Dashboard={total_sales:number;total_collected:number;total_receivabl
 export type Activity={id:number;customer_id:number;activity_type:string;description:string;follow_up_date?:string;user_name:string;created_at:string};
 export type CustomerFile={id:number;customer_id:number;original_name:string;content_type:string;size:number;description?:string;user_name:string;created_at:string};
 export type CustomerDetail=Customer&{sales:Sale[];activities:Activity[];files:CustomerFile[]};
+export type User={id:number;name:string;email:string;role:'admin'|'sales'|'collections'|'viewer';active?:boolean};
+export type Opportunity={id:number;customer_id:number;customer_name:string;owner_id:number;owner_name:string;title:string;amount:number;stage:'new'|'contacted'|'qualified'|'quoted'|'negotiation'|'won'|'lost';next_action?:string;next_action_date?:string;notes?:string;created_at:string;updated_at:string};
