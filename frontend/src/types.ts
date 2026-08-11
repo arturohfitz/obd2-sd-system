@@ -8,3 +8,6 @@ export type CustomerFile={id:number;customer_id:number;original_name:string;cont
 export type CustomerDetail=Customer&{sales:Sale[];activities:Activity[];files:CustomerFile[]};
 export type User={id:number;name:string;email:string;role:'admin'|'sales'|'collections'|'viewer';active?:boolean};
 export type Opportunity={id:number;customer_id:number;customer_name:string;owner_id:number;owner_name:string;title:string;amount:number;stage:'new'|'contacted'|'qualified'|'quoted'|'negotiation'|'won'|'lost';next_action?:string;next_action_date?:string;notes?:string;created_at:string;updated_at:string};
+export type ReportSummary={sales:number;collected:number;receivable:number;overdue:number;opportunities:number;won_opportunities:number;customers:number};
+export type ReceivableRow={customer_id:number;customer_name:string;phone:string;total:number;paid:number;balance:number;oldest_due_date?:string;days_overdue:number;aging_bucket:string};
+export type AuditLog={id:number;user_id:number;user_name:string;action:string;entity_type:string;entity_id?:number;description:string;created_at:string};

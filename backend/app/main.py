@@ -1,19 +1,21 @@
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+import csv
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 from .auth import create_token, current_user, hash_password, require_roles, verify_password
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
-from .models import Customer, CustomerActivity, CustomerFile, CustomerOwner, CustomerStatus, Opportunity, OpportunityStage, Payment, PaymentPromise, Product, PromiseStatus, Sale, SaleStatus, User
-from .schemas import ActivityIn, ActivityOut, AdminPasswordReset, CustomerDetail, CustomerFileOut, CustomerIn, CustomerOut, CustomerOwnerOut, DashboardOut, LoginIn, LoginOut, OpportunityIn, OpportunityOut, OwnerAssignment, PasswordChange, PaymentIn, PaymentOut, ProductIn, ProductOut, PromiseIn, PromiseOut, SaleIn, SaleOut, UserCreate, UserOut, UserUpdate
+from .models import AuditLog, Customer, CustomerActivity, CustomerFile, CustomerOwner, CustomerStatus, Opportunity, OpportunityStage, Payment, PaymentPromise, Product, PromiseStatus, Sale, SaleStatus, User
+from .schemas import ActivityIn, ActivityOut, AdminPasswordReset, AuditLogOut, CustomerDetail, CustomerFileOut, CustomerIn, CustomerOut, CustomerOwnerOut, DashboardOut, LoginIn, LoginOut, OpportunityIn, OpportunityOut, OwnerAssignment, PasswordChange, PaymentIn, PaymentOut, ProductIn, ProductOut, PromiseIn, PromiseOut, ReceivableRow, ReportSummary, SaleIn, SaleOut, UserCreate, UserOut, UserUpdate
 
 
 settings = get_settings()
@@ -25,6 +27,10 @@ def money(value) -> Decimal:
 
 def log_activity(db: Session, customer_id: int, user_id: int, activity_type: str, description: str, follow_up_date=None):
     db.add(CustomerActivity(customer_id=customer_id, user_id=user_id, activity_type=activity_type, description=description, follow_up_date=follow_up_date))
+
+
+def log_audit(db: Session, user_id: int, action: str, entity_type: str, entity_id: int | None, description: str):
+    db.add(AuditLog(user_id=user_id, action=action, entity_type=entity_type, entity_id=entity_id, description=description[:500]))
 
 
 def activity_out(item: CustomerActivity) -> ActivityOut:
@@ -124,7 +130,7 @@ def users(db: Session = Depends(get_db), _: User = Depends(current_user)):
 
 
 @app.post("/api/users", response_model=UserOut, status_code=201)
-def create_user(data: UserCreate, db: Session = Depends(get_db), _: User = Depends(require_roles("admin"))):
+def create_user(data: UserCreate, db: Session = Depends(get_db), admin: User = Depends(require_roles("admin"))):
     roles = {"admin", "sales", "collections", "viewer"}
     if data.role not in roles:
         raise HTTPException(400, "Rol no válido")
@@ -132,7 +138,9 @@ def create_user(data: UserCreate, db: Session = Depends(get_db), _: User = Depen
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, "Ya existe un usuario con ese correo")
     item = User(name=data.name, email=email, password_hash=hash_password(data.password), role=data.role)
-    db.add(item); db.commit(); db.refresh(item)
+    db.add(item); db.flush()
+    log_audit(db, admin.id, "create", "user", item.id, f"Usuario creado: {item.email} con rol {item.role}.")
+    db.commit(); db.refresh(item)
     return item
 
 
@@ -146,16 +154,18 @@ def update_user(user_id: int, data: UserUpdate, db: Session = Depends(get_db), a
     if data.role not in {"admin", "sales", "collections", "viewer"}:
         raise HTTPException(400, "Rol no válido")
     item.name, item.role, item.active = data.name, data.role, data.active
+    log_audit(db, admin.id, "update", "user", item.id, f"Usuario actualizado: rol {item.role}, activo {item.active}.")
     db.commit(); db.refresh(item)
     return item
 
 
 @app.patch("/api/users/{user_id}/password")
-def reset_user_password(user_id: int, data: AdminPasswordReset, db: Session = Depends(get_db), _: User = Depends(require_roles("admin"))):
+def reset_user_password(user_id: int, data: AdminPasswordReset, db: Session = Depends(get_db), admin: User = Depends(require_roles("admin"))):
     item = db.get(User, user_id)
     if not item:
         raise HTTPException(404, "Usuario no encontrado")
     item.password_hash = hash_password(data.new_password)
+    log_audit(db, admin.id, "password_reset", "user", item.id, f"Contraseña restablecida para {item.email}.")
     db.commit()
     return {"message": "Contraseña restablecida"}
 
@@ -206,6 +216,7 @@ def create_customer(data: CustomerIn, db: Session = Depends(get_db), user: User 
     item = Customer(**data.model_dump(exclude={"phone"}), phone=phone)
     db.add(item); db.flush()
     log_activity(db, item.id, user.id, "created", "Ficha del cliente creada.")
+    log_audit(db, user.id, "create", "customer", item.id, f"Cliente creado: {item.name}.")
     db.commit(); db.refresh(item)
     return CustomerOut.model_validate({**item.__dict__, "balance": 0})
 
@@ -217,6 +228,7 @@ def update_customer(customer_id: int, data: CustomerIn, db: Session = Depends(ge
     values = data.model_dump(); values["phone"] = "".join(c for c in data.phone if c.isdigit())
     for key, value in values.items(): setattr(item, key, value)
     log_activity(db, item.id, user.id, "updated", "Información general del cliente actualizada.", data.next_follow_up)
+    log_audit(db, user.id, "update", "customer", item.id, f"Cliente actualizado: {item.name}.")
     db.commit(); db.refresh(item)
     return CustomerOut.model_validate({**item.__dict__, "balance": customer_balance(item)})
 
@@ -305,6 +317,7 @@ def create_sale(data: SaleIn, db: Session = Depends(get_db), user: User = Depend
     if not db.get(Customer, data.customer_id): raise HTTPException(404, "Cliente no encontrado")
     item = Sale(**data.model_dump()); db.add(item); db.flush()
     log_activity(db, item.customer_id, user.id, "sale", f"Venta registrada: {item.concept} por {money(item.amount)} MXN.")
+    log_audit(db, user.id, "create", "sale", item.id, f"Venta registrada por {money(item.amount)} MXN: {item.concept}.")
     db.commit()
     item = db.scalar(select(Sale).where(Sale.id == item.id).options(selectinload(Sale.customer), selectinload(Sale.payments)))
     return sale_out(item)
@@ -316,8 +329,9 @@ def create_payment(data: PaymentIn, db: Session = Depends(get_db), user: User = 
     if not sale: raise HTTPException(404, "Venta no encontrada")
     balance = money(sale.amount) - sum((money(p.amount) for p in sale.payments), Decimal("0"))
     if money(data.amount) > balance: raise HTTPException(400, f"El abono supera el saldo de {balance}")
-    item = Payment(**data.model_dump()); db.add(item)
+    item = Payment(**data.model_dump()); db.add(item); db.flush()
     log_activity(db, sale.customer_id, user.id, "payment", f"Pago registrado por {money(item.amount)} MXN para {sale.concept}.")
+    log_audit(db, user.id, "create", "payment", item.id, f"Pago registrado por {money(item.amount)} MXN en venta {sale.id}.")
     db.commit(); db.refresh(item)
     return item
 
@@ -331,6 +345,7 @@ def cancel_sale(sale_id: int, db: Session = Depends(get_db), user: User = Depend
         raise HTTPException(400, "No se puede cancelar una venta que ya tiene pagos registrados")
     sale.status = SaleStatus.cancelled
     log_activity(db, sale.customer_id, user.id, "cancelled", f"Venta cancelada: {sale.concept}.")
+    log_audit(db, user.id, "cancel", "sale", sale.id, f"Venta cancelada: {sale.concept}.")
     db.commit()
     return sale_out(sale)
 
@@ -401,6 +416,7 @@ def create_opportunity(data: OpportunityIn, db: Session = Depends(get_db), actor
     item = Opportunity(**data.model_dump())
     db.add(item); db.flush()
     log_activity(db, customer.id, actor.id, "opportunity", f"Oportunidad creada: {item.title} por {money(item.amount)} MXN.", item.next_action_date)
+    log_audit(db, actor.id, "create", "opportunity", item.id, f"Oportunidad creada: {item.title}.")
     db.commit()
     item = db.scalar(select(Opportunity).where(Opportunity.id == item.id).options(selectinload(Opportunity.customer), selectinload(Opportunity.owner)))
     return opportunity_out(item)
@@ -419,6 +435,7 @@ def update_opportunity(opportunity_id: int, data: OpportunityIn, db: Session = D
         setattr(item, key, value)
     if old_stage != item.stage:
         log_activity(db, item.customer_id, actor.id, "opportunity", f"Oportunidad movida de {old_stage.value} a {item.stage.value}.", item.next_action_date)
+        log_audit(db, actor.id, "stage_change", "opportunity", item.id, f"Etapa cambiada de {old_stage.value} a {item.stage.value}.")
     db.commit()
     item = db.scalar(select(Opportunity).where(Opportunity.id == item.id).options(selectinload(Opportunity.customer), selectinload(Opportunity.owner)))
     return opportunity_out(item)
@@ -437,6 +454,90 @@ def agenda(db: Session = Depends(get_db), user: User = Depends(current_user)):
         .order_by(Opportunity.next_action_date)
     )
     return [opportunity_out(item) for item in db.scalars(query)]
+
+
+def report_dates(date_from: date | None, date_to: date | None) -> tuple[date, date]:
+    end = date_to or date.today()
+    start = date_from or end.replace(day=1)
+    if start > end:
+        raise HTTPException(400, "La fecha inicial no puede ser posterior a la fecha final")
+    return start, end
+
+
+@app.get("/api/reports/summary", response_model=ReportSummary)
+def report_summary(date_from: date | None = None, date_to: date | None = None, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    start, end = report_dates(date_from, date_to)
+    sales_total = money(db.scalar(select(func.sum(Sale.amount)).where(Sale.status == SaleStatus.won, Sale.sale_date.between(start, end))))
+    collected = money(db.scalar(select(func.sum(Payment.amount)).where(Payment.paid_at.between(start, end))))
+    all_sales = money(db.scalar(select(func.sum(Sale.amount)).where(Sale.status == SaleStatus.won)))
+    all_collected = money(db.scalar(select(func.sum(Payment.amount))))
+    overdue = money(db.scalar(select(func.sum(PaymentPromise.amount)).where(PaymentPromise.status == PromiseStatus.pending, PaymentPromise.due_date < date.today())))
+    opportunities_total = money(db.scalar(select(func.sum(Opportunity.amount)).where(Opportunity.stage.not_in([OpportunityStage.won, OpportunityStage.lost]))))
+    won_total = money(db.scalar(select(func.sum(Opportunity.amount)).where(Opportunity.stage == OpportunityStage.won)))
+    customers_count = db.scalar(select(func.count(Customer.id)).where(Customer.created_at <= datetime.combine(end, datetime.max.time()))) or 0
+    return ReportSummary(sales=sales_total, collected=collected, receivable=max(all_sales-all_collected, Decimal("0")), overdue=overdue, opportunities=opportunities_total, won_opportunities=won_total, customers=customers_count)
+
+
+def receivable_rows(db: Session) -> list[ReceivableRow]:
+    customers = db.scalars(select(Customer).options(selectinload(Customer.sales).selectinload(Sale.payments))).unique().all()
+    promises = db.scalars(select(PaymentPromise).where(PaymentPromise.status == PromiseStatus.pending).options(selectinload(PaymentPromise.sale))).all()
+    due_by_customer: dict[int, list[date]] = {}
+    for promise in promises:
+        due_by_customer.setdefault(promise.sale.customer_id, []).append(promise.due_date)
+    rows = []
+    for customer in customers:
+        valid_sales = [sale for sale in customer.sales if sale.status == SaleStatus.won]
+        total = sum((money(sale.amount) for sale in valid_sales), Decimal("0"))
+        paid = sum((money(payment.amount) for sale in valid_sales for payment in sale.payments), Decimal("0"))
+        balance = max(total - paid, Decimal("0"))
+        if balance <= 0:
+            continue
+        due_dates = due_by_customer.get(customer.id, [])
+        oldest = min(due_dates) if due_dates else None
+        days = max((date.today() - oldest).days, 0) if oldest else 0
+        bucket = "Al corriente" if days == 0 else "1-30 días" if days <= 30 else "31-60 días" if days <= 60 else "61-90 días" if days <= 90 else "+90 días"
+        rows.append(ReceivableRow(customer_id=customer.id, customer_name=customer.name, phone=customer.phone, total=total, paid=paid, balance=balance, oldest_due_date=oldest, days_overdue=days, aging_bucket=bucket))
+    return sorted(rows, key=lambda row: (row.days_overdue, row.balance), reverse=True)
+
+
+@app.get("/api/reports/receivables", response_model=list[ReceivableRow])
+def report_receivables(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    return receivable_rows(db)
+
+
+@app.get("/api/audit", response_model=list[AuditLogOut])
+def audit_logs(limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db), _: User = Depends(require_roles("admin"))):
+    items = db.scalars(select(AuditLog).options(selectinload(AuditLog.user)).order_by(AuditLog.created_at.desc()).limit(limit)).all()
+    return [AuditLogOut.model_validate({**item.__dict__, "user_name": item.user.name}) for item in items]
+
+
+@app.get("/api/reports/export/{report_type}")
+def export_report(report_type: str, date_from: date | None = None, date_to: date | None = None, db: Session = Depends(get_db), _: User = Depends(current_user)):
+    output = StringIO()
+    writer = csv.writer(output)
+    if report_type == "sales":
+        start, end = report_dates(date_from, date_to)
+        items = db.scalars(select(Sale).where(Sale.sale_date.between(start, end)).options(selectinload(Sale.customer), selectinload(Sale.payments)).order_by(Sale.sale_date)).all()
+        writer.writerow(["Fecha", "Cliente", "Concepto", "Unidad", "Estado", "Total MXN", "Pagado MXN", "Saldo MXN"])
+        for item in items:
+            row = sale_out(item)
+            writer.writerow([item.sale_date, item.customer.name, item.concept, item.vehicle or "", item.status.value, row.amount, row.paid, row.balance])
+    elif report_type == "receivables":
+        writer.writerow(["Cliente", "WhatsApp", "Total MXN", "Pagado MXN", "Saldo MXN", "Vencimiento más antiguo", "Días vencido", "Antigüedad"])
+        for row in receivable_rows(db):
+            writer.writerow([row.customer_name, row.phone, row.total, row.paid, row.balance, row.oldest_due_date or "", row.days_overdue, row.aging_bucket])
+    elif report_type == "audit":
+        if _.role != "admin":
+            raise HTTPException(403, "Solo administración puede exportar la auditoría")
+        items = db.scalars(select(AuditLog).options(selectinload(AuditLog.user)).order_by(AuditLog.created_at.desc())).all()
+        writer.writerow(["Fecha", "Usuario", "Acción", "Entidad", "ID", "Descripción"])
+        for item in items:
+            writer.writerow([item.created_at, item.user.name, item.action, item.entity_type, item.entity_id or "", item.description])
+    else:
+        raise HTTPException(404, "Reporte no disponible")
+    content = "\ufeff" + output.getvalue()
+    filename = f"obd2sd_{report_type}_{date.today().isoformat()}.csv"
+    return Response(content=content, media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.get("/api/dashboard", response_model=DashboardOut)

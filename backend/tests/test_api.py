@@ -2,6 +2,7 @@ import os
 from uuid import uuid4
 os.environ["DATABASE_URL"] = "sqlite:///./test_obd2sd.db"
 os.environ["SECRET_KEY"] = "test-secret-not-for-production"
+os.environ["UPLOAD_DIR"] = "./test_uploads"
 from fastapi.testclient import TestClient
 from app.main import app
 
@@ -57,6 +58,16 @@ def test_complete_commercial_flow():
         assert cancelled.status_code == 200 and cancelled.json()["status"] == "cancelled"
         refused = client.patch(f"/api/sales/{sale.json()['id']}/cancel", headers=headers)
         assert refused.status_code == 400
+        summary = client.get("/api/reports/summary?date_from=2026-08-01&date_to=2026-08-31", headers=headers)
+        assert summary.status_code == 200 and float(summary.json()["sales"]) > 0
+        receivables = client.get("/api/reports/receivables", headers=headers)
+        assert receivables.status_code == 200
+        export = client.get("/api/reports/export/sales?date_from=2026-08-01&date_to=2026-08-31", headers=headers)
+        assert export.status_code == 200 and "Cliente" in export.text
+        audit = client.get("/api/audit", headers=headers)
+        assert audit.status_code == 200 and audit.json()
+        forbidden_audit = client.get("/api/audit", headers=sales_headers)
+        assert forbidden_audit.status_code == 403
         sales = client.get("/api/sales", headers=headers).json()
         original = next(item for item in sales if item["id"] == sale.json()["id"])
         assert original["balance"] == "12000.00"

@@ -4,6 +4,8 @@ __pycache__/
 *.py[cod]
 *.db
 backend/uploads/
+backend/test_uploads/
+backups/
 node_modules/
 frontend/dist/
 *.tsbuildinfo

@@ -16,6 +16,8 @@ Portal web responsive para el control comercial, servicios, pagos, fechas promes
 - Acceso directo a WhatsApp y cancelación controlada de ventas sin pagos.
 - Usuarios con roles de administración, ventas, cobranza y consulta.
 - Embudo de oportunidades y agenda comercial por responsable.
+- Reportes ejecutivos, cartera por antigüedad y exportaciones CSV.
+- Bitácora administrativa y respaldos verificables.
 - Diseño adaptable a computadora, tablet y celular.
 - API protegida con autenticación y perfiles preparados para ampliación.
 
@@ -83,6 +85,41 @@ Los documentos se guardan fuera del frontend y solo pueden descargarse mediante 
 - **Consulta:** acceso de solo lectura.
 
 El módulo **Oportunidades** organiza el proceso en Nuevo, Contactado, Necesidad, Cotizado, Negociación, Ganado y Perdido. Cada oportunidad conserva responsable, valor estimado, próxima acción y fecha; la vista **Mi agenda** muestra únicamente los compromisos del usuario autenticado.
+
+## Reportes y auditoría
+
+El módulo **Reportes** permite seleccionar un periodo y consultar ventas, cobros, cartera total, vencido, pipeline y clientes. Las exportaciones CSV incluyen marca UTF-8 para abrir correctamente nombres y acentos en Excel.
+
+La antigüedad de saldos se clasifica en al corriente, 1–30, 31–60, 61–90 y más de 90 días. La bitácora administrativa registra altas y cambios de usuarios, clientes, ventas, pagos, cancelaciones y movimientos de oportunidades.
+
+## Respaldos
+
+Respaldo del entorno local:
+
+```bash
+./scripts/backup_local.sh
+```
+
+Respaldo de PostgreSQL y documentos en producción:
+
+```bash
+./scripts/backup_production.sh /ruta/segura/backups
+```
+
+Cada respaldo genera hashes `SHA256SUMS`. Para comprobarlos:
+
+```bash
+cd /ruta/al/respaldo
+sha256sum -c SHA256SUMS
+```
+
+La restauración de producción reemplaza la base y los documentos existentes, por lo que requiere confirmación explícita:
+
+```bash
+./scripts/restore_production.sh /ruta/production-AAAAMMDDTHHMMSSZ --confirm-restore
+```
+
+Antes de restaurar se debe crear un respaldo nuevo, detener el acceso de usuarios y confirmar el directorio exacto. Para producción se recomienda ejecutar `backup_production.sh` diariamente mediante cron y copiar los respaldos fuera de la VPS.
 
 ## Producción con Docker
 

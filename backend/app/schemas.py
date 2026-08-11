@@ -183,6 +183,39 @@ class CustomerOwnerOut(BaseModel):
     user_name: str
 
 
+class ReportSummary(BaseModel):
+    sales: Decimal
+    collected: Decimal
+    receivable: Decimal
+    overdue: Decimal
+    opportunities: Decimal
+    won_opportunities: Decimal
+    customers: int
+
+
+class ReceivableRow(BaseModel):
+    customer_id: int
+    customer_name: str
+    phone: str
+    total: Decimal
+    paid: Decimal
+    balance: Decimal
+    oldest_due_date: date | None
+    days_overdue: int
+    aging_bucket: str
+
+
+class AuditLogOut(ORMModel):
+    id: int
+    user_id: int
+    user_name: str
+    action: str
+    entity_type: str
+    entity_id: int | None
+    description: str
+    created_at: datetime
+
+
 class DashboardOut(BaseModel):
     total_sales: Decimal
     total_collected: Decimal

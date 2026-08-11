@@ -25,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { api, apiForm, downloadFile } from "./api";
-import type { Customer, CustomerDetail, Dashboard, Opportunity, Product, PromiseItem, Sale, User } from "./types";
+import type { AuditLog, Customer, CustomerDetail, Dashboard, Opportunity, Product, PromiseItem, ReceivableRow, ReportSummary, Sale, User } from "./types";
 import "./styles.css";
 
 const money = (n: number) =>
@@ -33,7 +33,7 @@ const money = (n: number) =>
     n || 0,
   );
 const today = () => new Date().toISOString().slice(0, 10);
-type Page = "dashboard" | "customers" | "pipeline" | "agenda" | "sales" | "collections" | "products" | "users";
+type Page = "dashboard" | "customers" | "pipeline" | "agenda" | "sales" | "collections" | "products" | "reports" | "users";
 
 function Login({ done }: { done: () => void }) {
   const [email, setEmail] = useState(""),
@@ -176,6 +176,7 @@ function Portal({ logout }: { logout: () => void }) {
     ["sales", "Ventas y servicios", BriefcaseBusiness],
     ["collections", "Cobranza", WalletCards],
     ["products", "Catálogo", Package],
+    ["reports", "Reportes", ClipboardList],
     ...(user?.role === "admin" ? [["users", "Usuarios", UserCog] as const] : []),
   ];
   return (
@@ -245,6 +246,7 @@ function PageContent({ page }: { page: Page }) {
   if (page === "sales") return <Sales />;
   if (page === "collections") return <Collections />;
   if (page === "products") return <Products />;
+  if (page === "reports") return <Reports />;
   return <UserManagement />;
 }
 function DashboardPage() {
@@ -984,6 +986,17 @@ function UserManagement() {
   async function toggle(user:User){try{await api(`/api/users/${user.id}`,{method:"PATCH",body:JSON.stringify({name:user.name,role:user.role,active:!user.active})});await load()}catch(error){window.alert((error as Error).message)}}
   async function reset(user:User){const password=window.prompt(`Nueva contraseña temporal para ${user.name} (mínimo 10 caracteres):`);if(!password)return;try{await api(`/api/users/${user.id}/password`,{method:"PATCH",body:JSON.stringify({new_password:password})});window.alert("Contraseña actualizada") }catch(error){window.alert((error as Error).message)}}
   return <><ActionHeader title="Usuarios" text="Accesos, roles y responsables del sistema." action="Nuevo usuario" click={() => setOpen(true)}/><div className="table-card"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{items.map((user) => <tr key={user.id}><td><b>{user.name}</b><small>{user.email}</small></td><td><span className="role-pill">{roleName[user.role]}</span></td><td><span className={`pill ${user.active ? "active" : "inactive"}`}>{user.active ? "Activo" : "Desactivado"}</span></td><td><button className="link" onClick={() => reset(user)}>Contraseña</button><button className={`link ${user.active ? "danger-link" : ""}`} onClick={() => toggle(user)}>{user.active ? "Desactivar" : "Activar"}</button></td></tr>)}</tbody></table></div>{open && <Modal title="Nuevo usuario" close={() => setOpen(false)}><form className="form" onSubmit={create}><Field label="Nombre completo" name="name" required/><Field label="Correo electrónico" name="email" type="email" required/><Field label="Contraseña temporal" name="password" type="password" minLength={10} required/><label>Rol<select name="role"><option value="sales">Ventas</option><option value="collections">Cobranza</option><option value="viewer">Solo consulta</option><option value="admin">Administrador</option></select></label><div className="role-help"><b>Ventas:</b> clientes y oportunidades. <b>Cobranza:</b> pagos y compromisos. <b>Consulta:</b> acceso sin cambios.</div><Submit/></form></Modal>}</>;
+}
+
+function Reports() {
+  const current = new Date(), firstDay = new Date(current.getFullYear(), current.getMonth(), 1).toISOString().slice(0,10);
+  const [dateFrom,setDateFrom] = useState(firstDay), [dateTo,setDateTo] = useState(today()),
+    [summary,setSummary] = useState<ReportSummary | null>(null), [rows,setRows] = useState<ReceivableRow[]>([]),
+    [audit,setAudit] = useState<AuditLog[] | null>(null);
+  const load = () => { api<ReportSummary>(`/api/reports/summary?date_from=${dateFrom}&date_to=${dateTo}`).then(setSummary); api<ReceivableRow[]>("/api/reports/receivables").then(setRows); api<AuditLog[]>("/api/audit?limit=30").then(setAudit).catch(() => setAudit(null)); };
+  useEffect(() => { void load(); }, []);
+  const exportCsv = (type:string) => downloadFile(`/api/reports/export/${type}?date_from=${dateFrom}&date_to=${dateTo}`, `obd2sd_${type}_${today()}.csv`);
+  return <><section className="reports-head"><div><h1>Reportes ejecutivos</h1><p>Resultados comerciales, cobranza y trazabilidad del sistema.</p></div><div className="date-filter"><Field label="Desde" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}/><Field label="Hasta" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}/><button onClick={load}>Aplicar</button></div></section><section className="report-stats"><article><span>Ventas del periodo</span><strong>{money(summary?.sales || 0)}</strong></article><article><span>Cobrado del periodo</span><strong>{money(summary?.collected || 0)}</strong></article><article><span>Cartera total</span><strong>{money(summary?.receivable || 0)}</strong></article><article className="report-danger"><span>Cartera vencida</span><strong>{money(summary?.overdue || 0)}</strong></article><article><span>Pipeline abierto</span><strong>{money(summary?.opportunities || 0)}</strong></article><article><span>Clientes</span><strong>{summary?.customers || 0}</strong></article></section><section className="report-section"><header><div><h2>Antigüedad de saldos</h2><p>Clientes con cuentas pendientes ordenados por días de mora.</p></div><button onClick={() => exportCsv("receivables")}><Download size={16}/>Exportar CSV</button></header><div className="table-card report-table"><table><thead><tr><th>Cliente</th><th>Total</th><th>Pagado</th><th>Saldo</th><th>Vencimiento</th><th>Antigüedad</th></tr></thead><tbody>{rows.map((row) => <tr key={row.customer_id}><td><b>{row.customer_name}</b><small>{row.phone}</small></td><td>{money(row.total)}</td><td>{money(row.paid)}</td><td className="owed">{money(row.balance)}</td><td>{row.oldest_due_date || "Sin promesa"}</td><td><span className={`aging aging-${row.days_overdue > 60 ? "high" : row.days_overdue ? "medium" : "current"}`}>{row.aging_bucket}</span></td></tr>)}</tbody></table></div></section><section className="report-section"><header><div><h2>Ventas por periodo</h2><p>Descarga movimientos detallados para abrirlos en Excel.</p></div><button onClick={() => exportCsv("sales")}><Download size={16}/>Exportar ventas</button></header></section>{audit && <section className="report-section"><header><div><h2>Bitácora de auditoría</h2><p>Últimas acciones sensibles registradas por el sistema.</p></div><button onClick={() => exportCsv("audit")}><Download size={16}/>Exportar auditoría</button></header><div className="audit-list">{audit.map((item) => <article key={item.id}><div className="audit-action">{item.action.replace("_"," ")}</div><div><b>{item.description}</b><p>{item.user_name} · {new Date(item.created_at).toLocaleString("es-MX")}</p></div><span>{item.entity_type} #{item.entity_id}</span></article>)}{!audit.length && <Empty text="La bitácora comenzará a llenarse con las siguientes operaciones."/>}</div></section>}</>;
 }
 
 function ActionHeader({
